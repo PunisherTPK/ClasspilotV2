@@ -18,6 +18,7 @@ Open the QR code in Expo Go. The new backup, file picker, sharing, and PDF expor
 - Keep unmarked attendance pending, cancel sessions without counting absences, and correct saved registers.
 - Set one weekly class schedule and generate sessions on a rolling 30-day window. Add extra and cover-up sessions; cover-ups require an explicit replacement or separate billing choice.
 - Record monthly, custom-period, daily, and hourly fee obligations. Daily billable dates and hourly student billable hours are entered manually. Currency precision follows the currency code; overlapping periods for one enrolment are blocked.
+- Set a class's monthly billing rate, currency, and due day, with optional student enrolment overrides. Generate monthly obligations for a chosen month; existing or overlapping periods are skipped.
 - Record partial payments against an obligation in its currency, edit or delete payments with confirmation, and keep local correction history for financial changes.
 - Record actual institute teaching duration when marking an institute session held. Reports exclude cancelled sessions and do not calculate commission or teacher pay.
 - Export a filtered institute report as CSV or PDF. CSV includes attendance, fee and payment rows, and actual teaching-hour records; PDF includes attendance, currency-separated fee totals, and teaching hours.
@@ -32,4 +33,5 @@ You approved the PRD's recommended defaults for its open financial decisions: pr
 
 ## Remaining PRD work
 
-This is still an implementation stage, not a release-complete app. It does not yet provide class-level billing defaults and student fee overrides, automatic monthly obligation generation, multi-obligation payment allocation, timetable version history, every requested report filter, or a full Android compatibility/release validation. These are not represented as complete in the UI or product copy. Review the current implementation against the PRD you supplied before treating it as ready for paid distribution.
+This is still an implementation stage, not a release-complete app. It does not yet provide multi-obligation payment allocation, timetable rule history, every requested report filter, or full Android compatibility/release validation. Review the current implementation against the PRD you supplied before treating it as ready for paid distribution.
+
