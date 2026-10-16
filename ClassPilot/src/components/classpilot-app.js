@@ -3,8 +3,8 @@ const ComponentFunction = function() {
   const React = require('react');
   const { View, Text, StyleSheet, ScrollView, TouchableOpacity, TextInput, Modal, Alert, Platform, StatusBar, useWindowDimensions } = require('react-native');
   const { Ionicons } = require('@expo/vector-icons');
-  const { createBottomTabNavigator } = require('@react-navigation/bottom-tabs');
-  const { createStackNavigator } = require('@react-navigation/stack');
+  const { createBottomTabNavigator } = require('expo-router/js-tabs');
+  const { createStackNavigator } = require('expo-router/js-stack');
   const { useSafeAreaInsets } = require('react-native-safe-area-context');
   const { useQuery, useMutation, useStorage, seedSampleRows, useBiometrics, useShare, useFilePicker } = require('../data/platform-hooks');
   // @end:imports
