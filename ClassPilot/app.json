@@ -4,48 +4,22 @@
     "slug": "classpilot",
     "version": "1.0.0",
     "orientation": "portrait",
-    "icon": "./assets/images/icon.png",
-    "scheme": "classpilot",
     "userInterfaceStyle": "automatic",
-    "ios": {
-      "icon": "./assets/expo.icon"
-    },
-    "android": {
-      "adaptiveIcon": {
-        "backgroundColor": "#E6F4FE",
-        "foregroundImage": "./assets/images/android-icon-foreground.png",
-        "backgroundImage": "./assets/images/android-icon-background.png",
-        "monochromeImage": "./assets/images/android-icon-monochrome.png"
-      },
-      "predictiveBackGestureEnabled": false
-    },
-    "web": {
-      "output": "static",
-      "favicon": "./assets/images/favicon.png"
-    },
+    "scheme": "classpilot",
     "plugins": [
       "expo-router",
       [
-        "expo-splash-screen",
-        {
-          "backgroundColor": "#208AEF",
-          "android": {
-            "image": "./assets/images/splash-icon.png",
-            "imageWidth": 76
-          }
-        }
+        "expo-local-authentication",
+        { "faceIDPermission": "ClassPilot uses Face ID to protect your records." }
       ]
     ],
-    "experiments": {
-      "typedRoutes": true,
-      "reactCompiler": true
-    },
+    "experiments": { "typedRoutes": true },
+    "ios": { "supportsTablet": true },
+    "android": { "edgeToEdgeEnabled": true },
+    "web": { "bundler": "metro" },
+    "owner": "punishertpks-team",
     "extra": {
-      "router": {},
-      "eas": {
-        "projectId": "d052233c-b68d-4eb4-bbfa-f1f635085f77"
-      }
-    },
-    "owner": "punishertpks-team"
+      "eas": { "projectId": "d052233c-b68d-4eb4-bbfa-f1f635085f77" }
+    }
   }
 }
