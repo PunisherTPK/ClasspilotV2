@@ -16,6 +16,7 @@ Open the QR code in Expo Go. The new backup, file picker, sharing, and PDF expor
 
 - Create institutes and independent classes; reuse student profiles across class enrolments.
 - Keep unmarked attendance pending, cancel sessions without counting absences, and correct saved registers.
+- View the teacher's complete monthly schedule in its own tab, including time, class, institute, duration, and cancelled-session status.
 - Set one weekly class schedule and generate sessions on a rolling 30-day window. Add extra and cover-up sessions; cover-ups require an explicit replacement or separate billing choice.
 - Record monthly, custom-period, daily, and hourly fee obligations. Daily billable dates and hourly student billable hours are entered manually. Currency precision follows the currency code; overlapping periods for one enrolment are blocked.
 - Set a class's monthly billing rate, currency, and due day, with optional student enrolment overrides. Generate monthly obligations for a chosen month; existing or overlapping periods are skipped.
