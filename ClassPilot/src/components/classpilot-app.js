@@ -1,12 +1,24 @@
 const ComponentFunction = function() {
   // @section:imports @depends:[]
   const React = require('react');
-  const { View, Text, StyleSheet, ScrollView, TouchableOpacity, TextInput, Modal, Alert, Platform, StatusBar, useWindowDimensions } = require('react-native');
+  const { View, Text, StyleSheet, ScrollView, TouchableOpacity, TextInput, Modal, Alert, Platform, StatusBar, AppState, useWindowDimensions } = require('react-native');
   const { Ionicons } = require('@expo/vector-icons');
   const { createBottomTabNavigator } = require('expo-router/js-tabs');
   const { createStackNavigator } = require('expo-router/js-stack');
   const { useSafeAreaInsets } = require('react-native-safe-area-context');
-  const { useQuery, useMutation, useStorage, seedSampleRows, useBiometrics, useShare, useFilePicker } = require('../data/platform-hooks');
+  const { useQuery, useMutation, useStorage, useDatabaseReady, useBiometrics, useShare, useFilePicker, exportBackup, restoreBackup, validateBackupFile, recordPayment, updatePayment, deletePayment, saveWeeklyTimetable, addHoliday, roundCurrencyAmount } = require('../data/platform-hooks');
+  var rootPreferenceState = useStorage('classpilot-preferences', { biometricLock: false });
+  var rootPreferences = rootPreferenceState[0] || { biometricLock: false };
+  var databaseReady = useDatabaseReady();
+  var rootBiometrics = useBiometrics();
+  var unlockState = React.useState(false);
+  var isUnlocked = unlockState[0];
+  var setIsUnlocked = unlockState[1];
+  React.useEffect(function() {
+    var subscription = AppState.addEventListener('change', function(state) { if ((state === 'background' || state === 'inactive') && rootPreferences.biometricLock) setIsUnlocked(false); });
+    return function() { subscription.remove(); };
+  }, [rootPreferences.biometricLock]);
+  var unlockApp = function() { rootBiometrics.authenticate({ promptMessage: 'Unlock ClassPilot' }).then(function(result) { if (result.success) setIsUnlocked(true); else if (result.error) notify('Could not authenticate', String(result.error)); }); };
   // @end:imports
 
   // @section:theme @depends:[]
@@ -46,40 +58,6 @@ const ComponentFunction = function() {
   var useTheme = function() { return React.useContext(ThemeContext); };
   // @end:ThemeContext
 
-  // @section:sample-data @depends:[]
-  var SAMPLE_ROWS = {
-    institutes: [
-      { institute_name: 'Northbridge Learning Centre', notes: 'After-school programmes', is_archived: false },
-      { institute_name: 'Harbour Arts Academy', notes: 'Weekend workshops', is_archived: false }
-    ],
-    classes: [
-      { institute_id: 'sample-institutes-1', class_name: 'Year 8 Mathematics', notes: 'Tuesday and Thursday group', is_archived: false },
-      { institute_id: 'sample-institutes-1', class_name: 'GCSE English Literature', notes: 'Small-group revision', is_archived: false },
-      { institute_id: 'sample-institutes-2', class_name: 'Creative Writing Studio', notes: 'Saturday mornings', is_archived: false },
-      { institute_id: null, class_name: 'A-Level Physics Tutoring', notes: 'Independent class', is_archived: false }
-    ],
-    students: [
-      { full_name: 'Amira Patel', student_phone: '', guardian_name: 'Nisha Patel', guardian_phone: '07123 456789', notes: 'Prefers written examples' },
-      { full_name: 'Leo Bennett', student_phone: '07234 567890', guardian_name: 'Morgan Bennett', guardian_phone: '', notes: '' },
-      { full_name: 'Sofia Chen', student_phone: '', guardian_name: 'Daniel Chen', guardian_phone: '07345 678901', notes: 'Enjoys group exercises' },
-      { full_name: 'Noah Williams', student_phone: '07456 789012', guardian_name: '', guardian_phone: '', notes: '' }
-    ],
-    enrolments: [
-      { student_id: 'sample-students-1', class_id: 'sample-classes-1', start_date: '@day(-30)', end_date: null, is_active: true },
-      { student_id: 'sample-students-2', class_id: 'sample-classes-1', start_date: '@day(-24)', end_date: null, is_active: true },
-      { student_id: 'sample-students-3', class_id: 'sample-classes-2', start_date: '@day(-15)', end_date: null, is_active: true },
-      { student_id: 'sample-students-4', class_id: 'sample-classes-4', start_date: '@day(-10)', end_date: null, is_active: true }
-    ],
-    sessions: [
-      { class_id: 'sample-classes-1', session_date: '@day(0)', session_type: 'regular', session_status: 'scheduled', duration_minutes: 60, original_session_id: null, notes: 'Algebra and equations' },
-      { class_id: 'sample-classes-2', session_date: '@day(0)', session_type: 'regular', session_status: 'scheduled', duration_minutes: 75, original_session_id: null, notes: 'Poetry analysis' },
-      { class_id: 'sample-classes-4', session_date: '@day(1)', session_type: 'extra', session_status: 'scheduled', duration_minutes: 90, original_session_id: null, notes: 'Exam preparation' },
-      { class_id: 'sample-classes-3', session_date: '@day(-2)', session_type: 'regular', session_status: 'cancelled', duration_minutes: 60, original_session_id: null, notes: 'School holiday' }
-    ],
-    attendance_records: []
-  };
-  // @end:sample-data
-
   // @section:helpers @depends:[theme]
   var today = function() {
     var d = new Date();
@@ -99,6 +77,16 @@ const ComponentFunction = function() {
     var parts = String(value).slice(0, 10).split('-');
     if (parts.length !== 3) return String(value);
     return parts[2] + '/' + parts[1] + '/' + parts[0];
+  };
+  var validISODate = function(value) {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(String(value || ''))) return false;
+    var parts = String(value).split('-').map(Number);
+    var date = new Date(parts[0], parts[1] - 1, parts[2], 12);
+    return date.getFullYear() === parts[0] && date.getMonth() === parts[1] - 1 && date.getDate() === parts[2];
+  };
+  var formatCurrency = function(value, currency) {
+    try { return new Intl.NumberFormat(undefined, { style: 'currency', currency: currency || 'GBP' }).format(Number(value || 0)); }
+    catch (error) { return (currency || '') + ' ' + String(value || 0); }
   };
   var ScreenHeader = function(props) {
     return React.createElement(View, { style: styles.header, componentId: props.id + '-header' },
@@ -139,7 +127,7 @@ const ComponentFunction = function() {
     var enrolmentsQuery = useQuery('enrolments');
     var attendanceQuery = useQuery('attendance_records');
     var current = today();
-    var todaysSessions = sessionsQuery.data.filter(function(s) { return s && String(s.session_date || '').slice(0, 10) === current; });
+    var todaysSessions = sessionsQuery.data.filter(function(s) { if (!s) return false; var cls = classesQuery.data.find(function(c) { return c && c.id === s.class_id; }) || {}; var institute = institutesQuery.data.find(function(x) { return x && x.id === cls.institute_id; }) || {}; return String(s.session_date || '').slice(0, 10) === current && !cls.is_archived && !institute.is_archived; });
     var pending = todaysSessions.filter(function(s) {
       if (s.session_status === 'cancelled') return false;
       var roster = enrolmentsQuery.data.filter(function(e) { return e && e.class_id === s.class_id && e.is_active !== false; });
@@ -294,7 +282,7 @@ const ComponentFunction = function() {
         }),
         !classesQuery.data.some(function(c) { return c && (activeInstitute ? c.institute_id === instituteId : !c.institute_id); }) ? React.createElement(EmptyLine, { id: 'classes-list', text: 'No classes in this space yet.' }) : null,
         !activeInstitute ? React.createElement(ActionButton, { id: 'classes-add-institute', label: 'New institute', icon: 'add', onPress: function() { setMode('institute'); }, style: { marginTop: 16 } }) : null,
-        React.createElement(ActionButton, { id: 'classes-add-class', label: activeInstitute ? 'Add class to institute' : 'New independent class', secondary: true, icon: 'add', onPress: function() { setMode('class'); }, style: { marginTop: 8 } })
+        (!activeInstitute || !activeInstitute.is_archived) ? React.createElement(ActionButton, { id: 'classes-add-class', label: activeInstitute ? 'Add class to institute' : 'New independent class', secondary: true, icon: 'add', onPress: function() { setMode('class'); }, style: { marginTop: 8 } }) : React.createElement(Text, { style: styles.meta }, 'Restore this institute before adding classes.')
       ),
       React.createElement(Modal, { visible: !!mode, transparent: true, animationType: 'fade', onRequestClose: function() { setMode(''); } },
         React.createElement(View, { style: [styles.modalOverlay, { marginTop: insets.top }], componentId: 'classes-modal-overlay' },
@@ -328,7 +316,7 @@ const ComponentFunction = function() {
     var save = function(allowSimilar) {
       if (!name.trim()) { notify('Name required', 'Enter the student’s full name.'); return; }
       var similar = studentsQuery.data.find(function(s) {
-        return s && ((s.full_name || '').trim().toLowerCase() === name.trim().toLowerCase() || (phone && s.student_phone === phone) || (guardianPhone && s.guardian_phone === guardianPhone));
+        return s && ((s.full_name || '').trim().toLowerCase() === name.trim().toLowerCase() || (phone && s.student_phone === phone));
       });
       if (similar && !allowSimilar) {
         confirmAction('A profile may already exist for ' + (similar.full_name || 'this student') + '. Create a separate profile anyway?', function() { save(true); });
@@ -395,6 +383,7 @@ var ClassDetailScreen = function(props) {
     var updateSession = useMutation('sessions', 'update');
     var c = classesQuery.data.find(function(x) { return x && x.id === classId; }) || {};
     var institute = institutesQuery.data.find(function(x) { return x && x.id === c.institute_id; }) || {};
+    var scopeArchived = !!(c.is_archived || institute.is_archived);
     var roster = enrolmentsQuery.data.filter(function(e) { return e && e.class_id === classId; });
     var sessions = sessionsQuery.data.filter(function(s) { return s && s.class_id === classId; }).sort(function(a, b) { return String(b.session_date || '').localeCompare(String(a.session_date || '')); });
     var [showSession, setShowSession] = React.useState(false);
@@ -403,27 +392,42 @@ var ClassDetailScreen = function(props) {
     var [duration, setDuration] = React.useState('60');
     var [sessionNotes, setSessionNotes] = React.useState('');
     var [originalId, setOriginalId] = React.useState(null);
-    var [weeklyDay, setWeeklyDay] = React.useState(String(new Date().getDay()));
-    var [weeklyTime, setWeeklyTime] = React.useState('09:00');
+    var [coverUpBillingChoice, setCoverUpBillingChoice] = React.useState('');
+    var [weeklyDays, setWeeklyDays] = React.useState(Array.isArray(c.weekly_days) ? c.weekly_days : [Number(c.weekly_day == null ? new Date().getDay() : c.weekly_day)]);
+    var [weeklyTime, setWeeklyTime] = React.useState(c.weekly_time || '09:00');
+    var [weeklyDuration, setWeeklyDuration] = React.useState(String(c.weekly_duration_minutes || 60));
     var [weeklyEnabled, setWeeklyEnabled] = React.useState(!!c.weekly_schedule_enabled);
+    var [billingType, setBillingType] = React.useState(c.billing_type || 'monthly');
+    var [feeRate, setFeeRate] = React.useState(c.fee_rate_default == null ? '' : String(c.fee_rate_default));
+    var [feeCurrency, setFeeCurrency] = React.useState(c.currency_default || 'GBP');
     var [weeklyMessage, setWeeklyMessage] = React.useState('');
     var createSession = function() {
-      if (c.is_archived) { notify('Class archived', 'Restore this class before adding sessions.'); return; }
+      if (scopeArchived) { notify('Class archived', 'Restore this class and institute before adding sessions.'); return; }
       if (!/^\d{4}-\d{2}-\d{2}$/.test(sessionDate) || isNaN(new Date(sessionDate + 'T12:00:00').getTime())) { notify('Invalid date', 'Choose a valid session date.'); return; }
       if (sessions.some(function(s) { return String(s.session_date || '').slice(0, 10) === sessionDate && s.session_type === sessionType && s.session_status !== 'cancelled'; })) {
         notify('Possible duplicate', 'A session of this type already exists on that date.'); return;
       }
-      insertSession.mutate({ class_id: classId, session_date: sessionDate, session_type: sessionType, session_status: 'scheduled', duration_minutes: Number(duration) || 60, original_session_id: originalId, notes: sessionNotes }).then(function() {
-        sessionsQuery.refetch(); setShowSession(false); setSessionNotes(''); setOriginalId(null);
+      if (sessionType === 'cover_up' && !coverUpBillingChoice) { notify('Choose cover-up billing', 'Choose whether this session replaces the original charge or is billed separately.'); return; }
+      insertSession.mutate({ class_id: classId, session_date: sessionDate, session_type: sessionType, session_status: 'scheduled', duration_minutes: Number(duration) || 60, original_session_id: originalId, cover_up_billing: sessionType === 'cover_up' ? coverUpBillingChoice : null, notes: sessionNotes }).then(function() {
+        sessionsQuery.refetch(); setShowSession(false); setSessionNotes(''); setOriginalId(null); setCoverUpBillingChoice('');
       }).catch(function(e) { notify('Could not add session', e.message); });
     };
     var saveWeeklySchedule = function() {
       var time = String(weeklyTime || '').trim();
       if (!/^(?:[01]\d|2[0-3]):[0-5]\d$/.test(time)) { notify('Invalid time', 'Enter the weekly start time as HH:MM using the 24-hour clock.'); return; }
-      updateClass.mutate({ id: classId, data: { weekly_schedule_enabled: weeklyEnabled, weekly_day: Number(weeklyDay), weekly_time: time } }).then(function() {
-        classesQuery.refetch();
-        setWeeklyMessage(weeklyEnabled ? 'Weekly schedule saved. Add dated sessions as they are confirmed; this setting does not create unlimited future sessions.' : 'Weekly schedule turned off.');
+      if (weeklyEnabled && !weeklyDays.length) { notify('Choose a weekday', 'Select one or more days for this weekly timetable.'); return; }
+      saveWeeklyTimetable(classId, { weekly_schedule_enabled: weeklyEnabled, weekly_days: weeklyDays, weekly_time: time, weekly_duration_minutes: Number(weeklyDuration) }).then(function() {
+        classesQuery.refetch(); sessionsQuery.refetch();
+        setWeeklyMessage(weeklyEnabled ? 'Weekly schedule saved. ClassPilot added sessions for the next 30 days. Future dates refresh as the schedule is saved.' : 'Weekly schedule turned off. Existing and historical sessions remain available.');
       }).catch(function(e) { notify('Schedule not saved', e.message || 'Please try again.'); });
+    };
+    var saveBillingRule = function() {
+      var rate = Number(feeRate);
+      if (feeRate && (!Number.isFinite(rate) || rate <= 0)) { notify('Invalid class rate', 'Enter a rate greater than zero, or leave it blank.'); return; }
+      if (feeCurrency.trim() && !/^[A-Z]{3}$/.test(feeCurrency.trim().toUpperCase())) { notify('Invalid currency', 'Enter a three-letter currency code.'); return; }
+      var roundedRate = null;
+      try { if (feeRate) roundedRate = roundCurrencyAmount(rate, feeCurrency.trim().toUpperCase()); } catch (error) { notify('Invalid currency', error.message); return; }
+      updateClass.mutate({ id: classId, data: { billing_type: billingType, fee_rate_default: roundedRate, currency_default: feeCurrency.trim().toUpperCase() || 'GBP' } }).then(classesQuery.refetch).catch(function(error) { notify('Billing rule not saved', error.message); });
     };
     var weekdayNames = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
     return React.createElement(View, { style: styles.screen, componentId: 'class-detail-screen' },
@@ -433,26 +437,36 @@ var ClassDetailScreen = function(props) {
         React.createElement(View, { style: styles.summaryCard, componentId: 'class-detail-summary' },
           React.createElement(Text, { style: styles.metricNumber, componentId: 'class-detail-roster-count' }, String(roster.filter(function(e) { return e.is_active !== false; }).length)),
           React.createElement(Text, { style: styles.meta, componentId: 'class-detail-roster-label' }, 'Active students · ' + sessions.length + ' recorded sessions'),
-          React.createElement(Text, { style: styles.statusText, componentId: 'class-detail-state' }, c.is_archived ? 'Archived · history preserved' : 'Active class')
+          React.createElement(Text, { style: styles.statusText, componentId: 'class-detail-state' }, scopeArchived ? 'Archived · history preserved' : 'Active class')
         ),
         React.createElement(Text, { style: styles.sectionTitle, componentId: 'class-detail-weekly-heading' }, 'Weekly regular schedule'),
         React.createElement(View, { style: styles.summaryCard, componentId: 'class-detail-weekly-card' },
-          React.createElement(Text, { style: styles.body, componentId: 'class-detail-weekly-description' }, 'Set the recurring weekday and start time for this regular class. This records the timetable rule; dated sessions are still added individually so future records are not generated without limit.'),
+          React.createElement(Text, { style: styles.body, componentId: 'class-detail-weekly-description' }, 'Set one recurring weekly class time. ClassPilot generates dated sessions for the next 30 days; past and held sessions stay unchanged.'),
           React.createElement(TouchableOpacity, { style: [styles.choice, weeklyEnabled ? styles.choiceActive : null], onPress: function() { setWeeklyEnabled(!weeklyEnabled); }, componentId: 'class-detail-weekly-toggle' },
             React.createElement(Text, { style: styles.choiceText, componentId: 'class-detail-weekly-toggle-label' }, weeklyEnabled ? 'Weekly schedule enabled' : 'Enable weekly schedule')
           ),
-          React.createElement(Text, { style: styles.fieldLabel, componentId: 'class-detail-weekly-day-label' }, 'Every week on'),
+          React.createElement(Text, { style: styles.fieldLabel, componentId: 'class-detail-weekly-day-label' }, 'Every week on (choose one or more days)'),
           React.createElement(View, { style: styles.choiceRow, componentId: 'class-detail-weekly-day-row' },
             weekdayNames.map(function(day, index) {
-              return React.createElement(TouchableOpacity, { key: day, style: [styles.choice, Number(weeklyDay) === index ? styles.choiceActive : null], onPress: function() { setWeeklyDay(String(index)); }, componentId: 'class-detail-weekly-day-' + index },
+              return React.createElement(TouchableOpacity, { key: day, style: [styles.choice, weeklyDays.indexOf(index) !== -1 ? styles.choiceActive : null], onPress: function() { setWeeklyDays(function(previous) { return previous.indexOf(index) === -1 ? previous.concat([index]).sort() : previous.filter(function(value) { return value !== index; }); }); }, componentId: 'class-detail-weekly-day-' + index },
                 React.createElement(Text, { style: styles.choiceText, componentId: 'class-detail-weekly-day-text-' + index }, day)
               );
             })
           ),
           React.createElement(Text, { style: styles.fieldLabel, componentId: 'class-detail-weekly-time-label' }, 'Start time (24-hour HH:MM)'),
           React.createElement(TextInput, { style: styles.input, value: weeklyTime, onChangeText: setWeeklyTime, placeholder: '09:00', placeholderTextColor: MUTED, keyboardType: 'numbers-and-punctuation', componentId: 'class-detail-weekly-time' }),
+          React.createElement(Text, { style: styles.fieldLabel }, 'Scheduled duration (minutes)'),
+          React.createElement(TextInput, { style: styles.input, value: weeklyDuration, onChangeText: setWeeklyDuration, placeholder: '60', placeholderTextColor: MUTED, keyboardType: 'numeric', componentId: 'class-detail-weekly-duration' }),
           React.createElement(ActionButton, { id: 'class-detail-weekly-save', label: 'Save weekly schedule', secondary: true, onPress: saveWeeklySchedule }),
           weeklyMessage ? React.createElement(Text, { style: styles.statusText, componentId: 'class-detail-weekly-message' }, weeklyMessage) : null
+        ),
+        React.createElement(Text, { style: styles.sectionTitle }, 'Student billing rule'),
+        React.createElement(View, { style: styles.summaryCard, componentId: 'class-detail-billing-rule' },
+          React.createElement(Text, { style: styles.body }, 'New obligations use this default. Existing obligations keep their saved amount and currency.'),
+          ['monthly', 'custom', 'daily', 'hourly'].map(function(type, i) { return React.createElement(TouchableOpacity, { key: type, style: [styles.reportOptionButton, billingType === type ? styles.reportOptionSelected : null], onPress: function() { setBillingType(type); }, componentId: 'class-detail-billing-type-' + i }, React.createElement(Text, { style: styles.reportOptionText }, type)); }),
+          React.createElement(TextInput, { style: styles.input, value: feeRate, onChangeText: setFeeRate, keyboardType: 'decimal-pad', placeholder: 'Default fee rate (optional)', placeholderTextColor: MUTED, componentId: 'class-detail-fee-rate' }),
+          React.createElement(TextInput, { style: styles.input, value: feeCurrency, onChangeText: setFeeCurrency, autoCapitalize: 'characters', placeholder: 'Currency code', placeholderTextColor: MUTED, componentId: 'class-detail-fee-currency' }),
+          React.createElement(ActionButton, { id: 'class-detail-billing-save', label: 'Save class billing rule', secondary: true, onPress: saveBillingRule })
         ),
         React.createElement(Text, { style: styles.sectionTitle, componentId: 'class-detail-roster-heading' }, 'Roster'),
         roster.length ? roster.map(function(e, i) {
@@ -470,7 +484,7 @@ var ClassDetailScreen = function(props) {
             }, componentId: 'class-detail-end-' + i }, React.createElement(Text, { style: styles.smallActionText, componentId: 'class-detail-end-label-' + i }, 'End')) : null
           );
         }) : React.createElement(EmptyLine, { id: 'class-detail-roster', text: 'No students enrolled yet.' }),
-        !c.is_archived ? React.createElement(ActionButton, { id: 'class-detail-enrol', label: 'Enrol a student', secondary: true, icon: 'person-add-outline', onPress: function() { props.navigation.navigate('Enrolment', { classId: classId }); }, style: { marginTop: 8 } }) : null,
+        !scopeArchived ? React.createElement(ActionButton, { id: 'class-detail-enrol', label: 'Enrol a student', secondary: true, icon: 'person-add-outline', onPress: function() { props.navigation.navigate('Enrolment', { classId: classId }); }, style: { marginTop: 8 } }) : null,
         React.createElement(Text, { style: styles.sectionTitle, componentId: 'class-detail-sessions-heading' }, 'Sessions'),
         sessions.length ? sessions.map(function(s, i) {
           return React.createElement(TouchableOpacity, { key: String(s.id || i), style: styles.railCard, onPress: function() { props.navigation.navigate('Attendance', { sessionId: s.id }); }, componentId: 'class-detail-session-' + i },
@@ -487,7 +501,7 @@ var ClassDetailScreen = function(props) {
             }, componentId: 'class-detail-cancel-session-' + i }, React.createElement(Text, { style: styles.smallActionText, componentId: 'class-detail-cancel-label-' + i }, 'Cancel')) : null
           );
         }) : React.createElement(EmptyLine, { id: 'class-detail-sessions', icon: 'calendar-outline', text: 'No sessions recorded for this class.' }),
-        !c.is_archived ? React.createElement(ActionButton, { id: 'class-detail-add-session', label: 'Add session', icon: 'add', onPress: function() { setShowSession(true); }, style: { marginTop: 8 } }) : null,
+        !scopeArchived ? React.createElement(ActionButton, { id: 'class-detail-add-session', label: 'Add session', icon: 'add', onPress: function() { setShowSession(true); }, style: { marginTop: 8 } }) : null,
         React.createElement(ActionButton, { id: 'class-detail-archive', label: c.is_archived ? 'Restore class' : 'Archive class', secondary: true, onPress: function() {
           confirmAction('Change archive state? Historical sessions and enrolments will be retained.', function() {
             updateClass.mutate({ id: classId, data: { is_archived: !c.is_archived } }).then(classesQuery.refetch).catch(function(e) { notify('Update failed', e.message); });
@@ -517,11 +531,16 @@ var ClassDetailScreen = function(props) {
                   );
                 }) : React.createElement(Text, { style: styles.meta, componentId: 'session-no-original' }, 'Cancel an original session first to link its cover-up.')
               ) : null,
+              sessionType === 'cover_up' ? React.createElement(View, { componentId: 'session-cover-up-billing' },
+                React.createElement(Text, { style: styles.fieldLabel }, 'Student billing for this cover-up'),
+                ['replacement', 'separate'].map(function(choice, i) { return React.createElement(TouchableOpacity, { key: choice, style: [styles.choice, coverUpBillingChoice === choice ? styles.choiceActive : null], onPress: function() { setCoverUpBillingChoice(choice); }, componentId: 'session-cover-up-choice-' + i }, React.createElement(Text, { style: styles.choiceText }, choice === 'replacement' ? 'Replace the original charge' : 'Bill as a separate session')); }),
+                React.createElement(Text, { style: styles.meta }, 'The original cancelled session stays in history. Choosing replacement means this session does not create a second charge for that intended fee.')
+              ) : null,
               React.createElement(Text, { style: styles.fieldLabel, componentId: 'session-duration-label' }, 'Duration in minutes'),
               React.createElement(TextInput, { style: styles.input, value: duration, onChangeText: function(t) { setDuration(t.replace(/[^0-9]/g, '')); }, keyboardType: 'numeric', placeholder: '60', placeholderTextColor: MUTED, componentId: 'session-duration-input' }),
               React.createElement(TextInput, { style: [styles.input, styles.notesInput], value: sessionNotes, onChangeText: setSessionNotes, multiline: true, numberOfLines: 4, textAlignVertical: 'top', placeholder: 'Session notes (optional)', placeholderTextColor: MUTED, componentId: 'session-notes-input' })
             ),
-            React.createElement(ActionButton, { id: 'session-save', label: 'Save session', onPress: createSession, disabled: sessionType === 'cover_up' && !originalId }),
+            React.createElement(ActionButton, { id: 'session-save', label: 'Save session', onPress: createSession, disabled: sessionType === 'cover_up' && (!originalId || !coverUpBillingChoice) }),
             React.createElement(ActionButton, { id: 'session-close', label: 'Cancel', secondary: true, onPress: function() { setShowSession(false); }, style: { marginTop: 8 } })
           )
         )
@@ -630,18 +649,26 @@ var ClassDetailScreen = function(props) {
     var height = useWindowDimensions().height;
     var params = props.route && props.route.params ? props.route.params : {};
     var classesQuery = useQuery('classes');
+    var institutesQuery = useQuery('institutes');
     var studentsQuery = useQuery('students');
     var enrolmentsQuery = useQuery('enrolments');
     var insertEnrolment = useMutation('enrolments', 'insert');
     var [classId, setClassId] = React.useState(params.classId || null);
     var [studentId, setStudentId] = React.useState(params.studentId || null);
     var [startDate, setStartDate] = React.useState(today());
+    var [firstBillablePeriod, setFirstBillablePeriod] = React.useState(today().slice(0, 7));
+    var [feeRateOverride, setFeeRateOverride] = React.useState('');
+    var [feeCurrencyOverride, setFeeCurrencyOverride] = React.useState('');
     var save = function() {
       if (!classId || !studentId) { notify('Choose both', 'Select a class and a student.'); return; }
       if (enrolmentsQuery.data.some(function(e) { return e && e.class_id === classId && e.student_id === studentId && e.is_active !== false; })) {
         notify('Already enrolled', 'This student is already active in that class.'); return;
       }
-      insertEnrolment.mutate({ class_id: classId, student_id: studentId, start_date: startDate, end_date: null, is_active: true }).then(function() {
+      if (!firstBillablePeriod.trim()) { notify('Choose the first billable period', 'Select the first period to bill for this enrolment.'); return; }
+      var overrideAmount = null;
+      if (feeRateOverride.trim()) { var rawOverride = Number(feeRateOverride); if (!Number.isFinite(rawOverride) || rawOverride <= 0) { notify('Invalid fee override', 'Enter an override rate greater than zero, or leave it blank.'); return; } try { overrideAmount = roundCurrencyAmount(rawOverride, (feeCurrencyOverride || 'GBP').trim().toUpperCase()); } catch (error) { notify('Invalid override currency', error.message); return; } }
+      if (feeCurrencyOverride.trim() && !/^[A-Z]{3}$/.test(feeCurrencyOverride.trim().toUpperCase())) { notify('Invalid override currency', 'Enter a three-letter currency code.'); return; }
+      insertEnrolment.mutate({ class_id: classId, student_id: studentId, start_date: startDate, end_date: null, first_billable_period: firstBillablePeriod.trim(), fee_rate_override: overrideAmount, fee_currency_override: feeCurrencyOverride.trim().toUpperCase() || null, is_active: true }).then(function() {
         enrolmentsQuery.refetch(); notify('Enrolled', 'The student is now on the class roster.'); props.navigation.goBack();
       }).catch(function(e) { notify('Could not enrol', e.message); });
     };
@@ -657,7 +684,7 @@ var ClassDetailScreen = function(props) {
           );
         }) : React.createElement(EmptyLine, { id: 'enrolment-students', text: 'Add a student in the directory first.' }),
         React.createElement(Text, { style: styles.sectionTitle, componentId: 'enrolment-class-heading' }, 'Class'),
-        classesQuery.data.filter(function(c) { return c && !c.is_archived; }).length ? classesQuery.data.filter(function(c) { return c && !c.is_archived; }).map(function(c, i) {
+        classesQuery.data.filter(function(c) { var institute = institutesQuery.data.find(function(x) { return x.id === c.institute_id; }) || {}; return c && !c.is_archived && !institute.is_archived; }).length ? classesQuery.data.filter(function(c) { var institute = institutesQuery.data.find(function(x) { return x.id === c.institute_id; }) || {}; return c && !c.is_archived && !institute.is_archived; }).map(function(c, i) {
           return React.createElement(TouchableOpacity, { key: String(c.id || i), style: [styles.selectRow, classId === c.id ? styles.selectedRow : null], onPress: function() { setClassId(c.id); }, componentId: 'enrolment-class-' + i },
             React.createElement(Text, { style: styles.cardTitle, componentId: 'enrolment-class-name-' + i }, c.class_name || 'Unnamed class'),
             classId === c.id ? React.createElement(Ionicons, { name: 'checkmark-circle', size: 24, color: PRIMARY }) : null
@@ -665,6 +692,11 @@ var ClassDetailScreen = function(props) {
         }) : React.createElement(EmptyLine, { id: 'enrolment-classes', text: 'Create an active class first.' }),
         React.createElement(Text, { style: styles.sectionTitle, componentId: 'enrolment-date-heading' }, 'Start date'),
         React.createElement(DatePickerInput, { value: startDate, onChange: setStartDate, componentId: 'enrolment-start-date' }),
+        React.createElement(Text, { style: styles.fieldLabel }, 'First billable period (selected manually)'),
+        React.createElement(TextInput, { style: styles.input, value: firstBillablePeriod, onChangeText: setFirstBillablePeriod, placeholder: 'YYYY-MM', placeholderTextColor: MUTED, componentId: 'enrolment-first-billable-period' }),
+        React.createElement(Text, { style: styles.fieldLabel }, 'Optional fee override for this enrolment'),
+        React.createElement(TextInput, { style: styles.input, value: feeRateOverride, onChangeText: setFeeRateOverride, keyboardType: 'decimal-pad', placeholder: 'Leave blank to use class rate', placeholderTextColor: MUTED, componentId: 'enrolment-fee-rate-override' }),
+        React.createElement(TextInput, { style: styles.input, value: feeCurrencyOverride, onChangeText: setFeeCurrencyOverride, autoCapitalize: 'characters', placeholder: 'Override currency (optional)', placeholderTextColor: MUTED, componentId: 'enrolment-fee-currency-override' }),
         React.createElement(ActionButton, { id: 'enrolment-save', label: 'Save enrolment', onPress: save, style: { marginTop: 16 } })
       )
     );
@@ -681,9 +713,17 @@ var ClassDetailScreen = function(props) {
     var enrolmentsQuery = useQuery('enrolments');
     var studentsQuery = useQuery('students');
     var attendanceQuery = useQuery('attendance_records');
+    var teachingHoursQuery = useQuery('teaching_hours');
     var insertAttendance = useMutation('attendance_records', 'insert');
     var updateAttendance = useMutation('attendance_records', 'update');
     var updateSession = useMutation('sessions', 'update');
+    var insertTeachingHours = useMutation('teaching_hours', 'insert');
+    var updateTeachingHours = useMutation('teaching_hours', 'update');
+    var [showDurationForm, setShowDurationForm] = React.useState(false);
+    var [recordingMethod, setRecordingMethod] = React.useState('manual');
+    var [actualHours, setActualHours] = React.useState('');
+    var [startTime, setStartTime] = React.useState('');
+    var [endTime, setEndTime] = React.useState('');
     var session = sessionsQuery.data.find(function(s) { return s && s.id === sessionId; }) || {};
     var c = classesQuery.data.find(function(x) { return x && x.id === session.class_id; }) || {};
     var sessionDay = String(session.session_date || '').slice(0, 10);
@@ -717,6 +757,15 @@ var ClassDetailScreen = function(props) {
         });
       });
       chain.then(function() { attendanceQuery.refetch(); }).catch(function(err) { attendanceQuery.refetch(); notify('Some changes were not saved', err.message); });
+    };
+    var finishSession = function(durationMinutes, method) {
+      var saveHeld = function() { updateSession.mutate({ id: sessionId, data: { session_status: 'held' } }).then(sessionsQuery.refetch).then(function() { setShowDurationForm(false); }).catch(function(error) { notify('Could not save teaching record', error.message); }); };
+      if (!c.institute_id) { saveHeld(); return; }
+      var minutes = Number(durationMinutes);
+      if (!Number.isFinite(minutes) || minutes <= 0) { notify('Enter actual duration', 'Institute teaching-hour reports need the actual duration for this held session.'); return; }
+      var previous = teachingHoursQuery.data.find(function(item) { return item.session_id === sessionId; });
+      var persist = previous ? updateTeachingHours.mutate({ id: previous.id, data: { duration_minutes: minutes, recording_method: method, start_time: method === 'start_end' ? startTime : null, end_time: method === 'start_end' ? endTime : null } }) : insertTeachingHours.mutate({ session_id: sessionId, duration_minutes: minutes, recording_method: method, start_time: method === 'start_end' ? startTime : null, end_time: method === 'start_end' ? endTime : null });
+      persist.then(saveHeld).catch(function(error) { notify('Could not save teaching hours', error.message); });
     };
     return React.createElement(View, { style: styles.screen, componentId: 'attendance-screen' },
       React.createElement(StatusBar, { backgroundColor: PRIMARY, barStyle: 'light-content' }),
@@ -757,236 +806,236 @@ var ClassDetailScreen = function(props) {
             ) : null
           );
         }) : React.createElement(EmptyLine, { id: 'attendance-roster', text: 'No students were enrolled for this session date.' }),
-        session.session_status === 'scheduled' && !c.is_archived ? React.createElement(ActionButton, { id: 'attendance-complete', label: 'Mark session held', secondary: true, onPress: function() {
-          confirmAction('Mark this teaching session as held? Unmarked students will remain unmarked.', function() {
-            updateSession.mutate({ id: sessionId, data: { session_status: 'held' } }).then(sessionsQuery.refetch).catch(function(err) { notify('Update failed', err.message); });
-          });
-        }, style: { marginTop: 16 } }) : null
+        session.session_status === 'scheduled' && !c.is_archived ? c.institute_id && showDurationForm ? React.createElement(View, { style: styles.summaryCard, componentId: 'attendance-teaching-duration-form' },
+          React.createElement(Text, { style: styles.cardTitle }, 'Actual institute teaching duration'),
+          ['manual', 'start_end'].map(function(method, index) { return React.createElement(TouchableOpacity, { key: method, style: [styles.reportOptionButton, recordingMethod === method ? styles.reportOptionSelected : null], onPress: function() { setRecordingMethod(method); }, componentId: 'attendance-duration-method-' + index }, React.createElement(Text, { style: styles.reportOptionText }, method === 'manual' ? 'Enter total hours' : 'Enter start and end times')); }),
+          recordingMethod === 'manual' ? React.createElement(TextInput, { style: styles.input, value: actualHours, onChangeText: setActualHours, keyboardType: 'decimal-pad', placeholder: 'Actual hours taught', placeholderTextColor: MUTED, componentId: 'attendance-actual-hours' }) : React.createElement(View, null,
+            React.createElement(TextInput, { style: styles.input, value: startTime, onChangeText: setStartTime, placeholder: 'Start time HH:MM', placeholderTextColor: MUTED, componentId: 'attendance-actual-start' }),
+            React.createElement(TextInput, { style: styles.input, value: endTime, onChangeText: setEndTime, placeholder: 'End time HH:MM', placeholderTextColor: MUTED, componentId: 'attendance-actual-end' })
+          ),
+          React.createElement(ActionButton, { id: 'attendance-save-hours', label: 'Save hours and mark held', onPress: function() {
+            if (recordingMethod === 'start_end') {
+              var timePattern = /^(?:[01]\d|2[0-3]):[0-5]\d$/;
+              if (!timePattern.test(startTime) || !timePattern.test(endTime) || endTime <= startTime) { notify('Check session times', 'Enter valid same-day times in HH:MM format, with the end after the start.'); return; }
+              var toMinutes = function(time) { return Number(time.slice(0, 2)) * 60 + Number(time.slice(3)); };
+              finishSession(toMinutes(endTime) - toMinutes(startTime), recordingMethod);
+            } else finishSession(Number(actualHours) * 60, recordingMethod);
+          } }),
+          React.createElement(ActionButton, { id: 'attendance-cancel-hours', label: 'Cancel', secondary: true, onPress: function() { setShowDurationForm(false); } })
+        ) : React.createElement(ActionButton, { id: 'attendance-complete', label: 'Mark session held', secondary: true, onPress: function() { confirmAction('Mark this teaching session as held? Unmarked students will remain unmarked.', function() { if (c.institute_id) setShowDurationForm(true); else finishSession(null, null); }); }, style: { marginTop: 16 } }) : null
       )
     );
   };
   // @end:AttendanceScreen
 
-  // @section:ReportsScreen @depends:[ThemeContext,styles,helpers]
-var ReportsScreen = function() {
+  // @section:FeesScreen @depends:[ThemeContext,styles,helpers]
+  var FeesScreen = function() {
     var insets = useSafeAreaInsets();
     var height = useWindowDimensions().height;
-    var institutesQuery = useQuery('institutes');
-    var classesQuery = useQuery('classes');
-    var studentsQuery = useQuery('students');
-    var enrolmentsQuery = useQuery('enrolments');
-    var sessionsQuery = useQuery('sessions');
-    var attendanceQuery = useQuery('attendance_records');
-    var financialStorage = useStorage('classpilot-monthly-report-financials', {});
-    var reportFinancials = financialStorage[0] || {};
-    var setReportFinancials = financialStorage[1];
-    var initialNow = new Date();
-    var initialMonth = initialNow.getFullYear() + '-' + String(initialNow.getMonth() + 1).padStart(2, '0');
-    var monthState = React.useState(initialMonth);
-    var selectedMonth = monthState[0];
-    var setSelectedMonth = monthState[1];
-    var instituteState = React.useState('');
-    var selectedInstituteId = instituteState[0];
-    var setSelectedInstituteId = instituteState[1];
-    var financialState = React.useState(true);
-    var showFinancials = financialState[0];
-    var setShowFinancials = financialState[1];
-    var deductionState = React.useState(false);
-    var deductQuarter = deductionState[0];
-    var setDeductQuarter = deductionState[1];
-    var validMonth = /^\d{4}-\d{2}$/.test(selectedMonth);
-    var monthStart = validMonth ? selectedMonth + '-01' : '';
-    var monthEnd = '';
-    if (validMonth) {
-      var monthParts = selectedMonth.split('-');
-      monthEnd = selectedMonth + '-' + String(new Date(Number(monthParts[0]), Number(monthParts[1]), 0).getDate()).padStart(2, '0');
-    }
-    var selectedInstitute = institutesQuery.data.find(function(item) { return item && item.id === selectedInstituteId; }) || null;
-    var instituteClassIds = classesQuery.data.filter(function(item) {
-      return item && item.institute_id === selectedInstituteId;
-    }).map(function(item) { return item.id; });
-    var monthSessions = validMonth && selectedInstituteId ? sessionsQuery.data.filter(function(item) {
-      var day = String(item && item.session_date || '').slice(0, 10);
-      return item && instituteClassIds.indexOf(item.class_id) !== -1 && day >= monthStart && day <= monthEnd && item.session_status !== 'cancelled';
-    }).sort(function(a, b) {
-      return String(a.session_date || '').localeCompare(String(b.session_date || ''));
-    }) : [];
-    var reportDays = [];
-    monthSessions.forEach(function(item) {
-      var day = String(item.session_date || '').slice(0, 10);
-      if (day && reportDays.indexOf(day) === -1) reportDays.push(day);
-    });
-    var reportRows = validMonth && selectedInstituteId ? enrolmentsQuery.data.filter(function(item) {
-      if (!item || instituteClassIds.indexOf(item.class_id) === -1) return false;
-      var enrolmentStart = String(item.start_date || '').slice(0, 10);
-      var enrolmentEnd = String(item.end_date || '9999-12-31').slice(0, 10);
-      return enrolmentStart <= monthEnd && enrolmentEnd >= monthStart;
-    }).map(function(enrolment) {
-      return {
-        enrolment: enrolment,
-        student: studentsQuery.data.find(function(item) { return item && item.id === enrolment.student_id; }) || {},
-        classRecord: classesQuery.data.find(function(item) { return item && item.id === enrolment.class_id; }) || {}
-      };
-    }).sort(function(a, b) {
-      var nameCompare = String(a.student.full_name || '').localeCompare(String(b.student.full_name || ''));
-      return nameCompare || String(a.classRecord.class_name || '').localeCompare(String(b.classRecord.class_name || ''));
-    }) : [];
-    var reportKey = function(enrolmentId) {
-      return selectedInstituteId + '|' + selectedMonth + '|' + enrolmentId;
+    var enrolments = useQuery('enrolments').data;
+    var students = useQuery('students').data;
+    var classes = useQuery('classes').data;
+    var obligations = useQuery('fee_obligations').data;
+    var payments = useQuery('payments').data;
+    var allocations = useQuery('payment_allocations').data;
+    var insertObligation = useMutation('fee_obligations', 'insert');
+    var [showForm, setShowForm] = React.useState(false);
+    var [selectedEnrolment, setSelectedEnrolment] = React.useState('');
+    var [feeType, setFeeType] = React.useState('monthly');
+    var [period, setPeriod] = React.useState(today().slice(0, 7));
+    var [quantity, setQuantity] = React.useState('');
+    var [billableDates, setBillableDates] = React.useState('');
+    var [amount, setAmount] = React.useState('');
+    var [currency, setCurrency] = React.useState('GBP');
+    var [dueDate, setDueDate] = React.useState(today());
+    var [paymentTarget, setPaymentTarget] = React.useState('');
+    var [paymentAmount, setPaymentAmount] = React.useState('');
+    var [paymentMethod, setPaymentMethod] = React.useState('cash');
+    var [editingPaymentId, setEditingPaymentId] = React.useState('');
+    var [editingAmount, setEditingAmount] = React.useState('');
+    var [editingDate, setEditingDate] = React.useState('');
+    var [editingMethod, setEditingMethod] = React.useState('cash');
+    var findEnrolment = function(id) { return enrolments.find(function(e) { return e.id === id; }) || {}; };
+    var getPaid = function(id) { return allocations.filter(function(a) { return a.obligation_id === id; }).reduce(function(sum, a) { return sum + Number(a.amount || 0); }, 0); };
+    var submitObligation = function() {
+      var enrolment = findEnrolment(selectedEnrolment);
+      var value = Number(amount);
+      var dates = feeType === 'daily' ? billableDates.split(',').map(function(date) { return date.trim(); }).filter(Boolean) : [];
+      if (dates.length !== new Set(dates).size) { notify('Duplicate billable date', 'List each billable date once.'); return; }
+      var qty = feeType === 'daily' ? dates.length : feeType === 'hourly' ? Number(quantity) : 1;
+      if (!enrolment.id || !Number.isFinite(value) || value <= 0 || !/^[A-Z]{3}$/.test(currency.trim().toUpperCase()) || !Number.isFinite(qty) || qty <= 0) { notify('Check fee details', 'Choose a student enrolment, valid amount, currency code, and quantity.'); return; }
+      if ((feeType === 'monthly' || feeType === 'hourly') && (!/^\d{4}-\d{2}$/.test(period) || Number(period.slice(5, 7)) < 1 || Number(period.slice(5, 7)) > 12)) { notify('Invalid billing month', 'Enter the period as YYYY-MM.'); return; }
+      if (feeType === 'custom' && (!/^\d{4}-\d{2}-\d{2}\/\d{4}-\d{2}-\d{2}$/.test(period) || !validISODate(period.slice(0, 10)) || !validISODate(period.slice(11)))) { notify('Invalid custom period', 'Enter valid inclusive start and end dates as YYYY-MM-DD/YYYY-MM-DD.'); return; }
+      if (feeType === 'daily' && (!dates.length || dates.some(function(date) { return !validISODate(date); }))) { notify('Choose billable dates', 'Enter each valid billable date as YYYY-MM-DD, separated by commas. Daily fees use only these selected dates.'); return; }
+      if (dueDate && !validISODate(dueDate)) { notify('Invalid due date', 'Enter a valid due date as YYYY-MM-DD.'); return; }
+      if (feeType === 'hourly' && (!quantity || !Number.isFinite(Number(quantity)))) { notify('Enter billable hours', 'Student billable hours are entered manually and are not inferred from session duration.'); return; }
+      var fixedAmount;
+      try { fixedAmount = roundCurrencyAmount(feeType === 'daily' || feeType === 'hourly' ? value * qty : value, currency.trim().toUpperCase()); }
+      catch (error) { notify('Invalid currency', error.message); return; }
+      var feePeriod = period.trim();
+      var rangeStart = feeType === 'monthly' || (feeType === 'hourly' && /^\d{4}-\d{2}$/.test(period)) ? period + '-01' : feeType === 'custom' ? period.slice(0, 10) : feeType === 'daily' ? dates.slice().sort()[0] : '';
+      var rangeEnd = feeType === 'monthly' || (feeType === 'hourly' && /^\d{4}-\d{2}$/.test(period)) ? period + '-' + String(new Date(Number(period.slice(0, 4)), Number(period.slice(5, 7)), 0).getDate()).padStart(2, '0') : feeType === 'custom' ? period.slice(11) : feeType === 'daily' ? dates.slice().sort().slice(-1)[0] : '';
+      var billingStartMonth = rangeStart ? rangeStart.slice(0, 7) : period.slice(0, 7);
+      if (enrolment.first_billable_period && billingStartMonth < String(enrolment.first_billable_period).slice(0, 7)) { notify('Before first billable period', 'This fee period is earlier than the first period selected for this enrolment.'); return; }
+      if (feeType === 'custom' && rangeStart > rangeEnd) { notify('Invalid custom period', 'The end date must be on or after the start date.'); return; }
+      var overlaps = obligations.some(function(o) { return o.enrolment_id === enrolment.id && rangeStart && o.period_start && rangeStart <= o.period_end && rangeEnd >= o.period_start; });
+      if (overlaps) { notify('Overlapping fee obligation', 'This period overlaps an existing obligation for this enrolment. Change the dates or review the earlier obligation first.'); return; }
+      insertObligation.mutate({ enrolment_id: enrolment.id, fee_type: feeType, period: feePeriod, period_start: rangeStart || null, period_end: rangeEnd || null, billable_dates: dates, quantity: qty, unit_rate: value, amount: fixedAmount, currency: currency.trim().toUpperCase(), due_date: dueDate || null, created_at: new Date().toISOString(), status: 'open' }).then(function() { setShowForm(false); setAmount(''); setQuantity(''); setBillableDates(''); }).catch(function(error) { notify('Could not save fee', error.message); });
     };
-    var readAmount = function(value) {
-      var amount = Number(String(value || '').replace(/,/g, ''));
-      return isFinite(amount) ? amount : 0;
+    var submitPayment = function(obligation) {
+      var value = Number(paymentAmount);
+      var remaining = Math.max(0, Number(obligation.amount) - getPaid(obligation.id));
+      recordPayment({ date: today(), amount: value, currency: obligation.currency, method: paymentMethod }, [{ obligation_id: obligation.id, amount: value }]).then(function() { setPaymentTarget(''); setPaymentAmount(''); }).catch(function(error) { notify('Payment not saved', error.message || (value > remaining ? 'Payment is greater than the remaining balance.' : 'Check the payment details.')); });
     };
-    var money = function(value) {
-      return Number(value || 0).toFixed(2);
-    };
-    var updateFinancialField = function(key, field, value) {
-      setReportFinancials(function(previous) {
-        var current = previous || {};
-        var nextRow = Object.assign({}, current[key] || {});
-        nextRow[field] = value;
-        return Object.assign({}, current, { [key]: nextRow });
-      });
-    };
-    var currencyGroups = {};
-    reportRows.forEach(function(row) {
-      var key = reportKey(row.enrolment.id);
-      var record = reportFinancials[key] || {};
-      var currency = String(record.currency || 'GBP').trim().toUpperCase() || 'GBP';
-      if (!currencyGroups[currency]) currencyGroups[currency] = { fees: 0, openingDue: 0, priorReceived: 0, monthPayment: 0, paid: 0, pending: 0 };
-      var group = currencyGroups[currency];
-      var fee = readAmount(record.fee);
-      var openingDue = readAmount(record.openingDue);
-      var priorReceived = readAmount(record.priorReceived);
-      var monthPayment = readAmount(record.monthPayment);
-      group.fees += fee;
-      group.openingDue += openingDue;
-      group.priorReceived += priorReceived;
-      group.monthPayment += monthPayment;
-      group.paid += priorReceived + monthPayment;
-      group.pending += Math.max(0, fee + openingDue - priorReceived - monthPayment);
-    });
-    var headerChildren = [
-      React.createElement(Text, { key: 'no', style: [styles.reportHeaderCell, styles.reportNumberCell], componentId: 'reports-table-heading-number' }, 'No.'),
-      React.createElement(Text, { key: 'student', style: [styles.reportHeaderCell, styles.reportStudentCell], componentId: 'reports-table-heading-student' }, 'Student'),
-      React.createElement(Text, { key: 'class', style: [styles.reportHeaderCell, styles.reportClassCell], componentId: 'reports-table-heading-class' }, 'Class')
-    ];
-    reportDays.forEach(function(day, index) {
-      headerChildren.push(React.createElement(Text, { key: 'day-' + day, style: [styles.reportHeaderCell, styles.reportDayCell], componentId: 'reports-table-heading-day-' + index }, String(Number(day.slice(8, 10)))));
-    });
-    if (showFinancials) {
-      [
-        ['fee', 'Fee'], ['openingDue', 'Opening due'], ['priorReceived', 'Prior received'],
-        ['monthPayment', 'Month payment'], ['paid', 'Paid'], ['pending', 'Pending'],
-        ['paymentDate', 'Date'], ['paymentTime', 'Time'], ['paymentMethod', 'Method'], ['currency', 'CCY']
-      ].forEach(function(item) {
-        headerChildren.push(React.createElement(Text, { key: 'finance-' + item[0], style: [styles.reportHeaderCell, styles.reportFinancialCell], componentId: 'reports-table-heading-' + item[0] }, item[1]));
-      });
-    }
-    var reportTableRows = reportRows.map(function(row, index) {
-      var entryKey = reportKey(row.enrolment.id);
-      var record = reportFinancials[entryKey] || {};
-      var currency = String(record.currency || 'GBP').trim().toUpperCase() || 'GBP';
-      var paid = readAmount(record.priorReceived) + readAmount(record.monthPayment);
-      var pending = Math.max(0, readAmount(record.fee) + readAmount(record.openingDue) - paid);
-      var children = [
-        React.createElement(Text, { key: 'no', style: [styles.reportCell, styles.reportNumberCell], componentId: 'reports-row-number-' + index }, String(index + 1)),
-        React.createElement(Text, { key: 'student', style: [styles.reportCell, styles.reportStudentCell], componentId: 'reports-row-student-' + index }, row.student.full_name || 'Student profile unavailable'),
-        React.createElement(Text, { key: 'class', style: [styles.reportCell, styles.reportClassCell], componentId: 'reports-row-class-' + index }, row.classRecord.class_name || 'Class unavailable')
-      ];
-      reportDays.forEach(function(day, dayIndex) {
-        var daySessions = monthSessions.filter(function(session) { return session.class_id === row.enrolment.class_id && String(session.session_date || '').slice(0, 10) === day; });
-        var marks = [];
-        daySessions.forEach(function(session) {
-          var attendance = attendanceQuery.data.find(function(item) { return item && item.enrolment_id === row.enrolment.id && item.session_id === session.id; });
-          var mark = attendance && attendance.attendance_status === 'present' ? 'P' : attendance && attendance.attendance_status === 'absent' ? 'A' : '·';
-          if (marks.indexOf(mark) === -1) marks.push(mark);
-        });
-        children.push(React.createElement(Text, { key: 'day-' + day, style: [styles.reportCell, styles.reportDayCell, marks.indexOf('A') !== -1 ? styles.reportAbsentCell : marks.indexOf('P') !== -1 ? styles.reportPresentCell : null], componentId: 'reports-row-' + index + '-day-' + dayIndex }, marks.length ? marks.join('/') : '—'));
-      });
-      if (showFinancials) {
-        [
-          ['fee', record.fee || ''], ['openingDue', record.openingDue || ''],
-          ['priorReceived', record.priorReceived || ''], ['monthPayment', record.monthPayment || '']
-        ].forEach(function(field) {
-          children.push(React.createElement(TextInput, { key: field[0], style: [styles.reportCellInput, styles.reportFinancialCell], value: String(field[1]), onChangeText: function(value) { updateFinancialField(entryKey, field[0], value); }, keyboardType: 'decimal-pad', placeholder: '0.00', placeholderTextColor: MUTED, componentId: 'reports-row-' + index + '-' + field[0] }));
-        });
-        children.push(React.createElement(Text, { key: 'paid', style: [styles.reportCell, styles.reportFinancialCell], componentId: 'reports-row-' + index + '-paid' }, money(paid)));
-        children.push(React.createElement(Text, { key: 'pending', style: [styles.reportCell, styles.reportFinancialCell], componentId: 'reports-row-' + index + '-pending' }, money(pending)));
-        [
-          ['paymentDate', record.paymentDate || '', 'Payment date'],
-          ['paymentTime', record.paymentTime || '', 'Payment time'],
-          ['paymentMethod', record.paymentMethod || '', 'Payment method'],
-          ['currency', currency, 'Currency code']
-        ].forEach(function(field) {
-          children.push(React.createElement(TextInput, { key: field[0], style: [styles.reportCellInput, styles.reportFinancialCell], value: String(field[1]), onChangeText: function(value) { updateFinancialField(entryKey, field[0], value); }, placeholder: field[2], placeholderTextColor: MUTED, autoCapitalize: field[0] === 'currency' ? 'characters' : 'none', componentId: 'reports-row-' + index + '-' + field[0] }));
-        });
-      }
-      return React.createElement(View, { key: String(row.enrolment.id || index), style: styles.reportTableRow, componentId: 'reports-table-row-' + index }, children);
-    });
-    var groupCurrencies = Object.keys(currencyGroups).sort();
-    var reportBody = !selectedInstituteId
-      ? React.createElement(EmptyLine, { id: 'reports-select-institute', icon: 'business-outline', text: 'Choose an institute to generate its monthly report.' })
-      : !validMonth
-        ? React.createElement(EmptyLine, { id: 'reports-invalid-month', icon: 'calendar-outline', text: 'Enter the month as YYYY-MM to generate the report.' })
-        : !reportRows.length
-          ? React.createElement(EmptyLine, { id: 'reports-no-rows', icon: 'people-outline', text: 'No student enrolments overlap this month for the selected institute.' })
-          : React.createElement(View, { style: styles.reportTableCard, componentId: 'reports-table-card' },
-              React.createElement(ScrollView, { horizontal: true, showsHorizontalScrollIndicator: true, componentId: 'reports-table-horizontal-scroll' },
-                React.createElement(View, { componentId: 'reports-table' },
-                  React.createElement(View, { style: styles.reportTableHeader, componentId: 'reports-table-header' }, headerChildren),
-                  reportTableRows.length ? reportTableRows : React.createElement(Text, { style: styles.meta, componentId: 'reports-empty-table-row' }, 'No rows for this month.')
-                )
+    return React.createElement(View, { style: styles.screen, componentId: 'fees-screen' },
+      React.createElement(StatusBar, { backgroundColor: PRIMARY, barStyle: 'light-content' }),
+      React.createElement(ScreenHeader, { id: 'fees', title: 'Fees & payments', subtitle: 'Fixed obligations · local records' }),
+      React.createElement(ScrollView, { style: { height: height - insets.top - insets.bottom - 88, overflow: 'auto' }, contentContainerStyle: { paddingTop: 16, paddingBottom: TAB_MENU_HEIGHT + insets.bottom + SCROLL_EXTRA_PADDING, paddingHorizontal: 16 }, componentId: 'fees-scroll' },
+        React.createElement(Text, { style: styles.body, componentId: 'fees-rule-note' }, 'Each fee is a fixed historical obligation. Daily billable days and hourly student billable hours are entered by you; attendance and teaching duration never calculate them.'),
+        React.createElement(ActionButton, { id: 'fees-add-obligation', label: showForm ? 'Close fee form' : 'Create fee obligation', icon: showForm ? 'close' : 'add', onPress: function() { setShowForm(!showForm); } }),
+        showForm ? React.createElement(View, { style: styles.summaryCard, componentId: 'fees-obligation-form' },
+          React.createElement(Text, { style: styles.fieldLabel }, 'Student and class'),
+          enrolments.filter(function(e) { return e && e.is_active !== false && !e.end_date; }).map(function(e, i) {
+            var student = students.find(function(s) { return s.id === e.student_id; }) || {};
+            var cls = classes.find(function(c) { return c.id === e.class_id; }) || {};
+            return React.createElement(TouchableOpacity, { key: e.id, style: [styles.reportInstituteOption, selectedEnrolment === e.id ? styles.reportInstituteOptionSelected : null], onPress: function() { setSelectedEnrolment(e.id); setFeeType(e.billing_type_override || cls.billing_type || 'monthly'); setAmount(String(e.fee_rate_override != null ? e.fee_rate_override : cls.fee_rate_default != null ? cls.fee_rate_default : '')); setCurrency(e.fee_currency_override || cls.currency_default || 'GBP'); setPeriod(e.first_billable_period || today().slice(0, 7)); }, componentId: 'fee-enrolment-' + i }, React.createElement(Text, { style: styles.body }, (student.full_name || 'Student') + ' · ' + (cls.class_name || 'Class')));
+          }),
+          React.createElement(Text, { style: styles.fieldLabel }, 'Billing type'),
+          ['monthly', 'custom period', 'daily', 'hourly'].map(function(type, i) { return React.createElement(TouchableOpacity, { key: type, style: [styles.reportOptionButton, feeType === type ? styles.reportOptionSelected : null], onPress: function() { setFeeType(type === 'custom period' ? 'custom' : type); }, componentId: 'fee-type-' + i }, React.createElement(Text, { style: styles.reportOptionText }, type)); }),
+          React.createElement(TextInput, { style: styles.input, value: period, onChangeText: setPeriod, placeholder: feeType === 'monthly' ? 'Billing month YYYY-MM' : 'Period or billable date range', placeholderTextColor: MUTED, componentId: 'fee-period-input' }),
+          feeType === 'daily' ? React.createElement(TextInput, { style: styles.input, value: billableDates, onChangeText: setBillableDates, placeholder: 'Billable dates YYYY-MM-DD, separated by commas', placeholderTextColor: MUTED, componentId: 'fee-billable-dates-input' }) : feeType === 'hourly' ? React.createElement(TextInput, { style: styles.input, value: quantity, onChangeText: setQuantity, keyboardType: 'decimal-pad', placeholder: 'Billable student hours (entered manually)', placeholderTextColor: MUTED, componentId: 'fee-quantity-input' }) : null,
+          React.createElement(TextInput, { style: styles.input, value: amount, onChangeText: setAmount, keyboardType: 'decimal-pad', placeholder: feeType === 'daily' || feeType === 'hourly' ? 'Rate per day/hour' : 'Fee amount', placeholderTextColor: MUTED, componentId: 'fee-amount-input' }),
+          React.createElement(TextInput, { style: styles.input, value: currency, onChangeText: setCurrency, autoCapitalize: 'characters', placeholder: 'Currency code, e.g. GBP', placeholderTextColor: MUTED, componentId: 'fee-currency-input' }),
+          React.createElement(TextInput, { style: styles.input, value: dueDate, onChangeText: setDueDate, placeholder: 'Due date YYYY-MM-DD', placeholderTextColor: MUTED, componentId: 'fee-due-date-input' }),
+          React.createElement(ActionButton, { id: 'fees-save-obligation', label: 'Save fixed obligation', onPress: submitObligation, style: { marginTop: 8 } })
+        ) : null,
+        obligations.length ? obligations.slice().sort(function(a, b) { return String(a.due_date || '').localeCompare(String(b.due_date || '')); }).map(function(o, i) {
+          var enrolment = findEnrolment(o.enrolment_id);
+          var student = students.find(function(s) { return s.id === enrolment.student_id; }) || {};
+          var cls = classes.find(function(c) { return c.id === enrolment.class_id; }) || {};
+          var paid = getPaid(o.id);
+          var balance = Math.max(0, Number(o.amount) - paid);
+          return React.createElement(View, { key: o.id, style: styles.listCard, componentId: 'fees-obligation-' + i },
+            React.createElement(View, { style: { flex: 1 } },
+              React.createElement(Text, { style: styles.cardTitle }, student.full_name || 'Student'),
+              React.createElement(Text, { style: styles.meta }, (cls.class_name || 'Class') + ' · ' + o.period + ' · ' + o.fee_type),
+              React.createElement(Text, { style: styles.meta }, formatCurrency(o.amount, o.currency) + ' · Paid ' + formatCurrency(paid, o.currency) + ' · Balance ' + formatCurrency(balance, o.currency)),
+              React.createElement(Text, { style: styles.statusText }, balance === 0 ? 'Paid' : paid > 0 ? 'Partially paid' : o.due_date && o.due_date < today() ? 'Overdue' : 'Unpaid'),
+              balance > 0 ? paymentTarget === o.id ? React.createElement(View, null,
+                React.createElement(TextInput, { style: styles.input, value: paymentAmount, onChangeText: setPaymentAmount, keyboardType: 'decimal-pad', placeholder: 'Payment amount', placeholderTextColor: MUTED, componentId: 'payment-amount-' + i }),
+                ['cash', 'bank transfer', 'other'].map(function(method, j) { return React.createElement(TouchableOpacity, { key: method, style: [styles.reportOptionButton, paymentMethod === method ? styles.reportOptionSelected : null], onPress: function() { setPaymentMethod(method); }, componentId: 'payment-method-' + i + '-' + j }, React.createElement(Text, { style: styles.reportOptionText }, method)); }),
+                React.createElement(ActionButton, { id: 'payment-save-' + i, label: 'Save payment', onPress: function() { submitPayment(o); } })
+              ) : React.createElement(ActionButton, { id: 'payment-open-' + i, label: 'Record payment', secondary: true, onPress: function() { setPaymentTarget(o.id); setPaymentAmount(''); } }) : null
+            ),
+            payments.filter(function(p) { return allocations.some(function(a) { return a.payment_id === p.id && a.obligation_id === o.id; }); }).map(function(p, j) { return React.createElement(View, { key: p.id + '-' + j, style: styles.paymentHistoryRow },
+              React.createElement(View, { style: { flex: 1 } }, React.createElement(Text, { style: styles.meta }, labelDate(p.date) + ' · ' + p.method + ' · ' + formatCurrency(p.amount, p.currency)),
+                editingPaymentId === p.id ? React.createElement(View, null,
+                  React.createElement(TextInput, { style: styles.input, value: editingDate, onChangeText: setEditingDate, placeholder: 'Payment date YYYY-MM-DD', placeholderTextColor: MUTED }),
+                  React.createElement(TextInput, { style: styles.input, value: editingAmount, onChangeText: setEditingAmount, keyboardType: 'decimal-pad', placeholder: 'Amount', placeholderTextColor: MUTED }),
+                  ['cash', 'bank transfer', 'other'].map(function(method, k) { return React.createElement(TouchableOpacity, { key: method, style: [styles.reportOptionButton, editingMethod === method ? styles.reportOptionSelected : null], onPress: function() { setEditingMethod(method); } }, React.createElement(Text, { style: styles.reportOptionText }, method)); }),
+                  React.createElement(ActionButton, { id: 'payment-edit-save-' + i + '-' + j, label: 'Save payment edit', onPress: function() { updatePayment(p.id, { date: editingDate, amount: editingAmount, method: editingMethod }).then(function() { setEditingPaymentId(''); }).catch(function(error) { notify('Could not edit payment', error.message); }); } })
+                ) : null
               ),
-              showFinancials ? React.createElement(View, { style: styles.reportSummary, componentId: 'reports-financial-summary' },
-                React.createElement(Text, { style: styles.cardTitle, componentId: 'reports-summary-heading' }, 'Monthly financial summary'),
-                groupCurrencies.map(function(currency, index) {
-                  var deduction = deductQuarter ? currencyGroups[currency].monthPayment * 0.25 : 0;
-                  var net = currencyGroups[currency].monthPayment - deduction;
-                  return React.createElement(View, { key: currency, style: styles.reportCurrencySummary, componentId: 'reports-currency-summary-' + index },
-                    React.createElement(Text, { style: styles.reportCurrencyTitle, componentId: 'reports-currency-heading-' + index }, currency),
-                    React.createElement(Text, { style: styles.meta, componentId: 'reports-currency-collected-' + index }, 'Month payments: ' + money(currencyGroups[currency].monthPayment)),
-                    deductQuarter ? React.createElement(Text, { style: styles.meta, componentId: 'reports-currency-deduction-' + index }, '25% deduction: ' + money(deduction)) : null,
-                    React.createElement(Text, { style: styles.reportNet, componentId: 'reports-currency-net-' + index }, 'Net payable: ' + money(net)),
-                    React.createElement(Text, { style: styles.meta, componentId: 'reports-currency-pending-' + index }, 'Outstanding: ' + money(currencyGroups[currency].pending))
-                  );
-                })
-              ) : null,
-              showFinancials && !groupCurrencies.length ? React.createElement(Text, { style: styles.meta, componentId: 'reports-no-finance-yet' }, 'Enter report amounts to see totals. Financial totals remain separate for each currency.') : null
-            );
+              editingPaymentId !== p.id ? React.createElement(TouchableOpacity, { onPress: function() { setEditingPaymentId(p.id); setEditingAmount(String(p.amount)); setEditingDate(p.date || today()); setEditingMethod(p.method || 'cash'); } }, React.createElement(Text, { style: styles.statusText }, 'Edit')) : null,
+              React.createElement(TouchableOpacity, { onPress: function() { confirmAction('Delete this payment? Its allocation will be removed, the balance recalculated, and the correction retained in local history.', function() { deletePayment(p.id).catch(function(error) { notify('Could not delete payment', error.message); }); }); } }, React.createElement(Text, { style: styles.errorText }, 'Delete'))
+            ); })
+          );
+        }) : React.createElement(EmptyLine, { id: 'fees-empty', icon: 'cash-outline', text: 'No fee obligations yet. Create a fixed obligation for an enrolment.' })
+      )
+    );
+  };
+  // @end:FeesScreen
+
+  // @section:ReportsScreen @depends:[ThemeContext,styles,helpers]
+  var ReportsScreen = function() {
+    var insets = useSafeAreaInsets();
+    var height = useWindowDimensions().height;
+    var institutes = useQuery('institutes').data;
+    var classes = useQuery('classes').data;
+    var students = useQuery('students').data;
+    var enrolments = useQuery('enrolments').data;
+    var sessions = useQuery('sessions').data;
+    var attendance = useQuery('attendance_records').data;
+    var obligations = useQuery('fee_obligations').data;
+    var payments = useQuery('payments').data;
+    var allocations = useQuery('payment_allocations').data;
+    var teachingHours = useQuery('teaching_hours').data;
+    var [selectedInstituteId, setSelectedInstituteId] = React.useState('');
+    var [selectedMonth, setSelectedMonth] = React.useState(today().slice(0, 7));
+    var selectedInstitute = institutes.find(function(x) { return x.id === selectedInstituteId; }) || null;
+    var classIds = classes.filter(function(c) { return c && c.institute_id === selectedInstituteId; }).map(function(c) { return c.id; });
+    var validMonth = /^\d{4}-\d{2}$/.test(selectedMonth);
+    var monthStart = selectedMonth + '-01';
+    var monthEnd = validMonth ? selectedMonth + '-' + String(new Date(Number(selectedMonth.slice(0, 4)), Number(selectedMonth.slice(5, 7)), 0).getDate()).padStart(2, '0') : '';
+    var filteredObligations = obligations.filter(function(o) { var e = enrolments.find(function(item) { return item.id === o.enrolment_id; }) || {}; var overlaps = o.period_start && o.period_end ? o.period_start <= monthEnd && o.period_end >= monthStart : String(o.period || '').slice(0, 7) === selectedMonth; return classIds.indexOf(e.class_id) !== -1 && overlaps; });
+    var selectedSessions = validMonth ? sessions.filter(function(s) { var day = String(s.session_date || '').slice(0, 10); return classIds.indexOf(s.class_id) !== -1 && day >= monthStart && day <= monthEnd; }) : [];
+    var heldSessions = selectedSessions.filter(function(s) { return s.session_status === 'held'; });
+    var rows = enrolments.filter(function(e) { if (!e || classIds.indexOf(e.class_id) === -1) return false; var from = String(e.start_date || '').slice(0, 10); var to = String(e.end_date || '9999-12-31').slice(0, 10); return from <= monthEnd && to >= monthStart; }).map(function(e) {
+      var person = students.find(function(s) { return s.id === e.student_id; }) || {};
+      var cls = classes.find(function(c) { return c.id === e.class_id; }) || {};
+      var eligible = heldSessions.filter(function(s) { var d = String(s.session_date || '').slice(0, 10); return s.class_id === e.class_id && d >= String(e.start_date || '').slice(0, 10) && d <= String(e.end_date || '9999-12-31').slice(0, 10); });
+      var present = eligible.filter(function(s) { return attendance.some(function(a) { return a.session_id === s.id && a.enrolment_id === e.id && a.attendance_status === 'present'; }); }).length;
+      var absent = eligible.filter(function(s) { return attendance.some(function(a) { return a.session_id === s.id && a.enrolment_id === e.id && a.attendance_status === 'absent'; }); }).length;
+      var obligationsFor = filteredObligations.filter(function(o) { return o.enrolment_id === e.id; });
+      var feesByCurrency = {};
+      obligationsFor.forEach(function(o) { var code = o.currency || '—'; if (!feesByCurrency[code]) feesByCurrency[code] = { owed: 0, paid: 0 }; feesByCurrency[code].owed += Number(o.amount || 0); feesByCurrency[code].paid += allocations.filter(function(a) { return a.obligation_id === o.id; }).reduce(function(sum, a) { return sum + Number(a.amount || 0); }, 0); });
+      return { enrolment: e, student: person, classRecord: cls, held: eligible.length, present: present, absent: absent, percent: eligible.length ? present / eligible.length * 100 : null, feesByCurrency: feesByCurrency };
+    });
+    var sessionIds = selectedSessions.map(function(s) { return s.id; });
+    var hoursRows = teachingHours.filter(function(h) { return sessionIds.indexOf(h.session_id) !== -1; }).map(function(h) { var session = sessions.find(function(s) { return s.id === h.session_id; }) || {}; var cls = classes.find(function(c) { return c.id === session.class_id; }) || {}; return { record: h, session: session, classRecord: cls }; }).filter(function(row) { return row.session.session_status !== 'cancelled'; });
+    var esc = function(value) { return String(value == null ? '' : value).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;'); };
+    var csvEscape = function(value) { return '"' + String(value == null ? '' : value).replace(/"/g, '""') + '"'; };
+    var exportCsv = function() {
+      var lines = [['Institute', selectedInstitute ? selectedInstitute.institute_name : '', 'Month', selectedMonth], [], ['Student', 'Class', 'Held sessions', 'Present', 'Absent', 'Attendance %', 'Currency', 'Fees', 'Paid', 'Balance']];
+      rows.forEach(function(row) { var keys = Object.keys(row.feesByCurrency); if (!keys.length) lines.push([row.student.full_name, row.classRecord.class_name, row.held, row.present, row.absent, row.percent == null ? 'N/A' : row.percent.toFixed(1), '', '', '', '']); else keys.forEach(function(code) { var f = row.feesByCurrency[code]; lines.push([row.student.full_name, row.classRecord.class_name, row.held, row.present, row.absent, row.percent == null ? 'N/A' : row.percent.toFixed(1), code, f.owed, f.paid, Math.max(0, f.owed - f.paid)]); }); });
+      lines.push([], ['Payment history'], ['Date', 'Student', 'Class', 'Method', 'Currency', 'Amount']);
+      payments.forEach(function(payment) { allocations.filter(function(allocation) { return allocation.payment_id === payment.id && filteredObligations.some(function(obligation) { return obligation.id === allocation.obligation_id; }); }).forEach(function(allocation) { var obligation = filteredObligations.find(function(row) { return row.id === allocation.obligation_id; }) || {}; var e = enrolments.find(function(row) { return row.id === obligation.enrolment_id; }) || {}; var person = students.find(function(row) { return row.id === e.student_id; }) || {}; var cls = classes.find(function(row) { return row.id === e.class_id; }) || {}; lines.push([payment.date, person.full_name, cls.class_name, payment.method, payment.currency, allocation.amount]); }); });
+      lines.push([], ['Teaching hours'], ['Date', 'Class', 'Session type', 'Recording method', 'Hours']);
+      hoursRows.forEach(function(row) { lines.push([String(row.session.session_date || '').slice(0, 10), row.classRecord.class_name, row.session.session_type, row.record.recording_method, Number(row.record.duration_minutes || 0) / 60]); });
+      return lines.map(function(line) { return line.map(csvEscape).join(','); }).join('\r\n');
+    };
+    var shareCsv = function() {
+      var FileSystem = require('expo-file-system/legacy');
+      var Sharing = require('expo-sharing');
+      var uri = FileSystem.cacheDirectory + 'classpilot-report-' + selectedMonth + '.csv';
+      FileSystem.writeAsStringAsync(uri, exportCsv(), { encoding: FileSystem.EncodingType.UTF8 }).then(function() { return Sharing.shareAsync(uri, { mimeType: 'text/csv', dialogTitle: 'Export ClassPilot report' }); }).catch(function(error) { notify('Export failed', error.message); });
+    };
+    var sharePdf = function() {
+      var Print = require('expo-print');
+      var Sharing = require('expo-sharing');
+      var body = rows.map(function(row) { return '<tr><td>' + esc(row.student.full_name) + '</td><td>' + esc(row.classRecord.class_name) + '</td><td>' + row.held + '</td><td>' + row.present + '</td><td>' + row.absent + '</td><td>' + (row.percent == null ? 'N/A' : row.percent.toFixed(1) + '%') + '</td></tr>'; }).join('');
+      var hoursBody = hoursRows.map(function(row) { return '<tr><td>' + esc(String(row.session.session_date || '').slice(0, 10)) + '</td><td>' + esc(row.classRecord.class_name) + '</td><td>' + esc(row.session.session_type) + '</td><td>' + esc(row.record.recording_method) + '</td><td>' + (Number(row.record.duration_minutes || 0) / 60).toFixed(2) + '</td></tr>'; }).join('');
+      var feeSummaryBody = Object.keys(currencySummary).sort().map(function(code) { var totals = currencySummary[code]; return '<tr><td>' + esc(code) + '</td><td>' + esc(formatCurrency(totals.owed, code)) + '</td><td>' + esc(formatCurrency(totals.paid, code)) + '</td><td>' + esc(formatCurrency(Math.max(0, totals.owed - totals.paid), code)) + '</td></tr>'; }).join('');
+      var html = '<html><body><h1>ClassPilot report</h1><p>Institute: ' + esc(selectedInstitute && selectedInstitute.institute_name) + ' · Month: ' + esc(selectedMonth) + '</p><h2>Attendance</h2><table border="1" cellspacing="0" cellpadding="6"><thead><tr><th>Student</th><th>Class</th><th>Held</th><th>Present</th><th>Absent</th><th>Attendance</th></tr></thead><tbody>' + body + '</tbody></table><h2>Fee totals by currency</h2><table border="1" cellspacing="0" cellpadding="6"><thead><tr><th>Currency</th><th>Owed</th><th>Paid</th><th>Outstanding</th></tr></thead><tbody>' + feeSummaryBody + '</tbody></table><h2>Teaching hours</h2><p>Actual recorded duration: ' + (totalMinutes / 60).toFixed(2) + ' hours. No commission or teacher pay is calculated.</p><table border="1" cellspacing="0" cellpadding="6"><thead><tr><th>Date</th><th>Class</th><th>Session type</th><th>Method</th><th>Hours</th></tr></thead><tbody>' + hoursBody + '</tbody></table></body></html>';
+      Print.printToFileAsync({ html: html }).then(function(result) { return Sharing.shareAsync(result.uri, { mimeType: 'application/pdf', dialogTitle: 'Export ClassPilot report' }); }).catch(function(error) { notify('PDF export failed', error.message); });
+    };
+    var totalMinutes = hoursRows.reduce(function(sum, row) { return sum + Number(row.record.duration_minutes || 0); }, 0);
+    var currencySummary = {};
+    filteredObligations.forEach(function(o) { var code = o.currency || '—'; if (!currencySummary[code]) currencySummary[code] = { owed: 0, paid: 0 }; currencySummary[code].owed += Number(o.amount || 0); currencySummary[code].paid += allocations.filter(function(a) { return a.obligation_id === o.id; }).reduce(function(sum, a) { return sum + Number(a.amount || 0); }, 0); });
     return React.createElement(View, { style: styles.screen, componentId: 'reports-screen' },
       React.createElement(StatusBar, { backgroundColor: PRIMARY, barStyle: 'light-content' }),
-      React.createElement(ScreenHeader, { id: 'reports', title: 'Monthly report', subtitle: selectedInstitute ? selectedInstitute.institute_name : 'Institute attendance & payments' }),
+      React.createElement(ScreenHeader, { id: 'reports', title: 'Reports', subtitle: selectedInstitute ? selectedInstitute.institute_name + ' · ' + selectedMonth : 'Attendance, fees & teaching hours' }),
       React.createElement(ScrollView, { style: { height: height - insets.top - insets.bottom - 88, overflow: 'auto' }, contentContainerStyle: { paddingTop: 12, paddingBottom: TAB_MENU_HEIGHT + insets.bottom + SCROLL_EXTRA_PADDING, paddingHorizontal: 16 }, componentId: 'reports-scroll' },
-        React.createElement(Text, { style: styles.fieldLabel, componentId: 'reports-institute-label' }, 'Institute'),
-        institutesQuery.data.filter(function(item) { return item && !item.is_archived; }).length
-          ? React.createElement(ScrollView, { horizontal: true, showsHorizontalScrollIndicator: false, style: styles.reportInstitutePicker, componentId: 'reports-institute-picker' },
-              institutesQuery.data.filter(function(item) { return item && !item.is_archived; }).map(function(item, index) {
-                return React.createElement(TouchableOpacity, { key: String(item.id || index), style: [styles.reportInstituteOption, selectedInstituteId === item.id ? styles.reportInstituteOptionSelected : null], onPress: function() { setSelectedInstituteId(item.id); }, componentId: 'reports-institute-option-' + index },
-                  React.createElement(Text, { style: [styles.reportInstituteText, selectedInstituteId === item.id ? styles.reportInstituteTextSelected : null], componentId: 'reports-institute-option-label-' + index }, item.institute_name || 'Unnamed institute'));
-              })
-            )
-          : React.createElement(Text, { style: styles.meta, componentId: 'reports-no-institutes' }, 'Create an institute before generating an institute report.'),
-        React.createElement(Text, { style: styles.fieldLabel, componentId: 'reports-month-label' }, 'Report month'),
-        React.createElement(TextInput, { style: styles.reportMonthInput, value: selectedMonth, onChangeText: setSelectedMonth, placeholder: 'YYYY-MM', placeholderTextColor: MUTED, keyboardType: 'numbers-and-punctuation', autoCapitalize: 'none', componentId: 'reports-month-input' }),
-        React.createElement(View, { style: styles.reportOptions, componentId: 'reports-options' },
-          React.createElement(TouchableOpacity, { style: [styles.reportOptionButton, showFinancials ? styles.reportOptionSelected : null], onPress: function() { setShowFinancials(!showFinancials); }, componentId: 'reports-toggle-financial-columns' },
-            React.createElement(Ionicons, { name: showFinancials ? 'eye-outline' : 'eye-off-outline', size: 18, color: PRIMARY }),
-            React.createElement(Text, { style: styles.reportOptionText, componentId: 'reports-toggle-financial-label' }, showFinancials ? 'Hide financial columns' : 'Show financial columns')
-          ),
-          React.createElement(TouchableOpacity, { style: [styles.reportOptionButton, deductQuarter ? styles.reportOptionSelected : null], onPress: function() { setDeductQuarter(!deductQuarter); }, componentId: 'reports-toggle-deduction' },
-            React.createElement(Ionicons, { name: deductQuarter ? 'checkmark-circle-outline' : 'ellipse-outline', size: 18, color: PRIMARY }),
-            React.createElement(Text, { style: styles.reportOptionText, componentId: 'reports-toggle-deduction-label' }, deductQuarter ? 'Apply 25% deduction' : 'No 25% deduction')
-          )
-        ),
-        React.createElement(Text, { style: styles.reportNote, componentId: 'reports-note' }, 'Attendance comes from saved class registers. Financial amounts are entered and saved locally for this monthly report; they do not create fee obligations or payment records. Currency totals are kept separate.'),
-        reportBody
+        React.createElement(Text, { style: styles.fieldLabel }, 'Institute'),
+        institutes.filter(function(x) { return x && !x.is_archived; }).map(function(item, i) { return React.createElement(TouchableOpacity, { key: item.id, style: [styles.reportInstituteOption, selectedInstituteId === item.id ? styles.reportInstituteOptionSelected : null], onPress: function() { setSelectedInstituteId(item.id); }, componentId: 'reports-institute-' + i }, React.createElement(Text, { style: styles.reportInstituteText }, item.institute_name)); }),
+        React.createElement(Text, { style: styles.fieldLabel }, 'Report month'),
+        React.createElement(TextInput, { style: styles.reportMonthInput, value: selectedMonth, onChangeText: setSelectedMonth, placeholder: 'YYYY-MM', placeholderTextColor: MUTED, componentId: 'reports-month-input' }),
+        selectedInstituteId ? React.createElement(View, null,
+          React.createElement(Text, { style: styles.sectionTitle }, 'Attendance'),
+          React.createElement(Text, { style: styles.reportNote }, 'Only held sessions count. Unmarked attendance remains pending; cancelled sessions are excluded. Filters: ' + selectedInstitute.institute_name + ', ' + selectedMonth + '.'),
+          rows.length ? rows.map(function(row, i) { return React.createElement(View, { key: row.enrolment.id, style: styles.listCard, componentId: 'reports-student-' + i }, React.createElement(View, { style: { flex: 1 } }, React.createElement(Text, { style: styles.cardTitle }, row.student.full_name), React.createElement(Text, { style: styles.meta }, row.classRecord.class_name + ' · ' + row.held + ' held · ' + row.present + ' present · ' + row.absent + ' absent'), React.createElement(Text, { style: styles.statusText }, row.percent == null ? 'No held sessions' : row.percent.toFixed(1) + '% attendance'))); }) : React.createElement(EmptyLine, { id: 'reports-no-attendance', text: 'No enrolments in this institute for this month.' }),
+          React.createElement(Text, { style: styles.sectionTitle }, 'Outstanding fees'),
+          Object.keys(currencySummary).sort().map(function(code, i) { var totals = currencySummary[code]; return React.createElement(Text, { key: code, style: styles.meta, componentId: 'reports-fee-summary-' + i }, code + ' · Owed ' + formatCurrency(totals.owed, code) + ' · Paid ' + formatCurrency(totals.paid, code) + ' · Outstanding ' + formatCurrency(Math.max(0, totals.owed - totals.paid), code)); }),
+          filteredObligations.map(function(o, i) { var e = enrolments.find(function(item) { return item.id === o.enrolment_id; }) || {}; var student = students.find(function(item) { return item.id === e.student_id; }) || {}; var paid = allocations.filter(function(a) { return a.obligation_id === o.id; }).reduce(function(sum, a) { return sum + Number(a.amount || 0); }, 0); var balance = Math.max(0, Number(o.amount) - paid); return balance > 0 ? React.createElement(Text, { key: o.id, style: styles.meta, componentId: 'reports-fee-' + i }, student.full_name + ' · ' + formatCurrency(balance, o.currency) + ' · ' + o.period) : null; }),
+          React.createElement(Text, { style: styles.sectionTitle }, 'Institute teaching hours'),
+          React.createElement(Text, { style: styles.body }, 'Recorded actual duration total: ' + (totalMinutes / 60).toFixed(2) + ' hours. Cancelled sessions contribute zero. No commission or teacher pay is calculated.'),
+          hoursRows.map(function(row, i) { return React.createElement(Text, { key: row.record.id || i, style: styles.meta, componentId: 'reports-hour-' + i }, String(row.session.session_date || '').slice(0, 10) + ' · ' + row.classRecord.class_name + ' · ' + row.session.session_type + ' · ' + (Number(row.record.duration_minutes || 0) / 60).toFixed(2) + ' hours'); }),
+          React.createElement(View, { style: styles.reportOptions }, React.createElement(ActionButton, { id: 'reports-export-csv', label: 'Export CSV', icon: 'download-outline', onPress: shareCsv }), React.createElement(ActionButton, { id: 'reports-export-pdf', label: 'Export attendance PDF', secondary: true, icon: 'document-outline', onPress: sharePdf }))
+        ) : React.createElement(EmptyLine, { id: 'reports-select-institute', text: 'Choose an institute to generate a filtered report.' })
       )
     );
   };
 // @end:ReportsScreen
-
   // @section:SettingsScreen @depends:[ThemeContext,styles,helpers]
   var SettingsScreen = function(props) {
     var insets = useSafeAreaInsets();
@@ -994,9 +1043,33 @@ var ReportsScreen = function() {
     var biometrics = useBiometrics();
     var sharing = useShare();
     var picker = useFilePicker();
+    var holidaysQuery = useQuery('holidays');
+    var deleteHoliday = useMutation('holidays', 'delete');
     var [preferences, setPreferences] = useStorage('classpilot-preferences', { biometricLock: false });
-    var [unlocked, setUnlocked] = React.useState(false);
+    var backupState = useStorage('classpilot-last-successful-backup', null);
+    var lastBackup = backupState[0];
+    var setLastBackup = backupState[1];
+    var backupIsStale = !lastBackup || Date.now() - new Date(lastBackup).getTime() > 30 * 24 * 60 * 60 * 1000;
     var [message, setMessage] = React.useState('');
+    var [holidayDate, setHolidayDate] = React.useState(today());
+    var [holidayName, setHolidayName] = React.useState('');
+    var saveHoliday = function() { addHoliday(holidayDate, holidayName).then(function() { setHolidayName(''); setMessage('Holiday saved. Scheduled sessions on that date were cancelled and retained in history.'); }).catch(function(error) { notify('Holiday not saved', error.message); }); };
+    var createBackup = function() {
+      exportBackup().then(function(data) { return sharing.share(data); }).then(function(result) {
+        if (!result.success) { notify('Backup not completed', result.error); return; }
+        setLastBackup(new Date().toISOString());
+        setMessage('Backup file prepared. Store it somewhere safe; it contains student and financial data.');
+      }).catch(function(error) { notify('Backup failed', error.message); });
+    };
+    var importBackup = function() {
+      picker.pickFile().then(function(raw) {
+        if (!raw) return;
+        validateBackupFile(raw);
+        confirmAction('Restore replaces all ClassPilot data on this device. The selected backup is valid. Continue?', function() {
+          restoreBackup(raw).then(function() { setLastBackup(null); setMessage('Backup restored.'); }).catch(function(error) { notify('Restore failed', error.message); });
+        });
+      }).catch(function(error) { notify('Backup not restored', error.message); });
+    };
     var toggleLock = function() {
       if (preferences.biometricLock) {
         biometrics.authenticate({ promptMessage: 'Turn off ClassPilot app lock' }).then(function(result) {
@@ -1024,18 +1097,29 @@ var ReportsScreen = function() {
         ),
         React.createElement(Text, { style: styles.sectionTitle, componentId: 'settings-data-heading' }, 'Backup & exports'),
         React.createElement(View, { style: styles.summaryCard, componentId: 'settings-backup-card' },
-          React.createElement(Text, { style: styles.cardTitle, componentId: 'settings-backup-title' }, 'Backup is not yet available'),
-          React.createElement(Text, { style: styles.body, componentId: 'settings-backup-description' }, 'The available local-data hooks do not expose an atomic database export or restore operation. A file picker alone cannot safely restore related records or roll back a failed restore. Do not rely on this app as your only copy of important records.'),
-          React.createElement(Text, { style: styles.meta, componentId: 'settings-backup-warning' }, 'Future backup files may contain sensitive student information.')
+          React.createElement(Text, { style: styles.cardTitle, componentId: 'settings-backup-title' }, 'Manual full backup'),
+          React.createElement(Text, { style: styles.body, componentId: 'settings-backup-description' }, lastBackup ? 'Last shared successfully: ' + labelDate(String(lastBackup).slice(0, 10)) : 'No successful backup recorded yet.'),
+          backupIsStale ? React.createElement(Text, { style: styles.errorText, componentId: 'settings-backup-stale' }, lastBackup ? 'Backup reminder: your last backup is over 30 days old.' : 'Backup reminder: create your first backup.') : null,
+          React.createElement(Text, { style: styles.meta, componentId: 'settings-backup-warning' }, 'Backup files are not encrypted and may contain sensitive student and financial information. Store them safely. App lock does not encrypt data.'),
+          React.createElement(ActionButton, { id: 'settings-export-backup', label: 'Create backup file', icon: 'download-outline', onPress: createBackup, style: { marginTop: 12 } }),
+          React.createElement(ActionButton, { id: 'settings-import-backup', label: 'Restore backup', secondary: true, icon: 'refresh-outline', onPress: importBackup, style: { marginTop: 8 } })
         ),
         React.createElement(View, { style: styles.summaryCard, componentId: 'settings-exports-card' },
-          React.createElement(Text, { style: styles.cardTitle, componentId: 'settings-exports-title' }, 'PDF and CSV exports'),
-          React.createElement(Text, { style: styles.body, componentId: 'settings-exports-description' }, 'Verified file creation and filtered PDF/CSV export are not available in this version. Sharing a summary is not a substitute for a complete export.')
+          React.createElement(Text, { style: styles.cardTitle, componentId: 'settings-exports-title' }, 'PDF and CSV reports'),
+          React.createElement(Text, { style: styles.body, componentId: 'settings-exports-description' }, 'Filtered report exports are available from the report screens. Exports keep totals separated by currency.')
+        ),
+        React.createElement(Text, { style: styles.sectionTitle, componentId: 'settings-holidays-heading' }, 'Holiday calendar'),
+        React.createElement(View, { style: styles.summaryCard, componentId: 'settings-holidays-card' },
+          React.createElement(Text, { style: styles.body }, 'A saved holiday cancels scheduled sessions on that date and keeps their history.'),
+          React.createElement(TextInput, { style: styles.input, value: holidayDate, onChangeText: setHolidayDate, placeholder: 'Date YYYY-MM-DD', placeholderTextColor: MUTED, componentId: 'settings-holiday-date' }),
+          React.createElement(TextInput, { style: styles.input, value: holidayName, onChangeText: setHolidayName, placeholder: 'Holiday name (optional)', placeholderTextColor: MUTED, componentId: 'settings-holiday-name' }),
+          React.createElement(ActionButton, { id: 'settings-holiday-save', label: 'Add holiday', onPress: saveHoliday }),
+          holidaysQuery.data.map(function(holiday, i) { return React.createElement(View, { key: holiday.id, style: styles.paymentHistoryRow, componentId: 'settings-holiday-' + i }, React.createElement(Text, { style: styles.body }, labelDate(holiday.date) + (holiday.name ? ' · ' + holiday.name : '')), React.createElement(TouchableOpacity, { onPress: function() { confirmAction('Remove this holiday? Sessions already cancelled for that date remain cancelled.', function() { deleteHoliday.mutate({ id: holiday.id }).catch(function(error) { notify('Could not remove holiday', error.message); }); }); } }, React.createElement(Text, { style: styles.errorText }, 'Remove'))); })
         ),
         React.createElement(Text, { style: styles.sectionTitle, componentId: 'settings-scope-heading' }, 'What works today'),
         React.createElement(View, { style: styles.summaryCard, componentId: 'settings-scope-card' },
-          React.createElement(Text, { style: styles.body, componentId: 'settings-scope-text' }, 'Institutes, independent classes, reusable students, enrolments, dated sessions, cancellations, and attendance are stored in local tables. Attendance changes save as you mark them.'),
-          React.createElement(Text, { style: [styles.body, { marginTop: 12 }], componentId: 'settings-future-text' }, 'Recurring timetables, holidays, billing rules, obligations, payments, currencies, teaching-hour reports, and validated backup/restore require additional data tables and integrity controls. They are intentionally not simulated or calculated from incomplete records.')
+          React.createElement(Text, { style: styles.body, componentId: 'settings-scope-text' }, 'Operational records are stored on this device. ClassPilot has no required account, hosted backend, or cloud sync. An app lock controls access but does not encrypt local records or backup files.'),
+          React.createElement(Text, { style: [styles.body, { marginTop: 12 }], componentId: 'settings-future-text' }, 'Your last successful backup: ' + (lastBackup ? labelDate(String(lastBackup).slice(0, 10)) : 'Not recorded. Create manual backups regularly.'))
         ),
         picker.error ? React.createElement(Text, { style: styles.errorText, componentId: 'settings-picker-error' }, picker.error) : null,
         message ? React.createElement(Text, { style: styles.meta, componentId: 'settings-message' }, message) : null
@@ -1127,6 +1211,7 @@ var ReportsScreen = function() {
     reportCurrencySummary: { backgroundColor: BACKGROUND, borderRadius: 10, padding: 12, marginTop: 10 },
     reportCurrencyTitle: { fontSize: 15, fontWeight: '700', color: PRIMARY },
     reportNet: { fontSize: 16, fontWeight: '700', color: INK, marginTop: 8 }
+    ,paymentHistoryRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingTop: 8, marginTop: 8, borderTopWidth: 1, borderTopColor: BORDER }
   });
   // @end:styles
 
@@ -1136,7 +1221,7 @@ var ReportsScreen = function() {
     return React.createElement(View, { style: { flex: 1, width: '100%', height: '100%', overflow: 'hidden' }, componentId: 'main-tab-shell' },
       React.createElement(Tab.Navigator, {
         screenOptions: function(options) {
-          var icons = { Home: 'home-outline', Classes: 'library-outline', Students: 'people-outline', Reports: 'stats-chart-outline', Settings: 'settings-outline' };
+          var icons = { Home: 'home-outline', Classes: 'library-outline', Students: 'people-outline', Fees: 'cash-outline', Reports: 'stats-chart-outline', Settings: 'settings-outline' };
           return {
             headerShown: false,
             tabBarActiveTintColor: PRIMARY,
@@ -1151,8 +1236,9 @@ var ReportsScreen = function() {
         }
       },
         React.createElement(Tab.Screen, { name: 'Home', component: HomeScreen }),
-        React.createElement(Tab.Screen, { name: 'Classes', component: ClassesScreen }),
+    React.createElement(Tab.Screen, { name: 'Classes', component: ClassesScreen }),
         React.createElement(Tab.Screen, { name: 'Students', component: StudentsScreen }),
+        React.createElement(Tab.Screen, { name: 'Fees', component: FeesScreen }),
         React.createElement(Tab.Screen, { name: 'Reports', component: ReportsScreen }),
         React.createElement(Tab.Screen, { name: 'Settings', component: SettingsScreen })
       )
@@ -1173,7 +1259,13 @@ var MainNavigator = function() {
 // @end:MainNavigator
 
   // @section:return @depends:[ThemeProvider,MainNavigator,sample-data]
-  if (seedSampleRows) seedSampleRows(SAMPLE_ROWS);
+  if (!databaseReady) return React.createElement(View, { style: { flex: 1, alignItems: 'center', justifyContent: 'center', backgroundColor: BACKGROUND } }, React.createElement(Text, { style: { color: PRIMARY } }, 'Loading your local records…'));
+  if (rootPreferences.biometricLock && !isUnlocked) return React.createElement(View, { style: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: 28, backgroundColor: BACKGROUND } },
+    React.createElement(StatusBar, { backgroundColor: PRIMARY, barStyle: 'light-content' }),
+    React.createElement(Text, { style: { fontSize: 25, fontWeight: '700', color: INK, marginBottom: 10 } }, 'ClassPilot is locked'),
+    React.createElement(Text, { style: { color: MUTED, textAlign: 'center', lineHeight: 21, marginBottom: 20 } }, 'Biometric app lock restricts access on this device. It does not encrypt the local database or backup files.'),
+    React.createElement(TouchableOpacity, { style: styles.button, onPress: unlockApp }, React.createElement(Text, { style: styles.buttonText }, 'Unlock with biometrics'))
+  );
   return React.createElement(ThemeProvider, null,
     React.createElement(View, { style: { flex: 1, width: '100%', height: '100%' }, componentId: 'app-root' },
       React.createElement(MainNavigator)
@@ -1182,3 +1274,5 @@ var MainNavigator = function() {
   // @end:return
 };
 module.exports = ComponentFunction;
+
+
