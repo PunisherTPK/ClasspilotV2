@@ -1,5 +1,5 @@
-Warning: truncated output (original token count: 33856)
-Total output lines: 1312
+Warning: truncated output (original token count: 35094)
+Total output lines: 1353
 
 const ComponentFunction = function() {
   // @section:imports @depends:[]
@@ -219,6 +219,46 @@ const ComponentFunction = function() {
     );
   };
   // @end:HomeScreen
+
+  // @section:ScheduleScreen @depends:[ThemeContext,styles,helpers]
+  var ScheduleScreen = function(props) {
+    var insets = useSafeAreaInsets();
+    var height = useWindowDimensions().height;
+    var sessions = useQuery('sessions').data;
+    var classes = useQuery('classes').data;
+    var institutes = useQuery('institutes').data;
+    var [selectedMonth, setSelectedMonth] = React.useState(today().slice(0, 7));
+    var validMonth = /^\\d{4}-\\d{2}$/.test(selectedMonth) && Number(selectedMonth.slice(5, 7)) >= 1 && Number(selectedMonth.slice(5, 7)) <= 12;
+    var start = validMonth ? selectedMonth + '-01' : '';
+    var end = validMonth ? selectedMonth + '-' + String(new Date(Number(selectedMonth.slice(0, 4)), Number(selectedMonth.slice(5, 7)), 0).getDate()).padStart(2, '0') : '';
+    var rows = validMonth ? sessions.filter(function(s) { var date = String(s.session_date || '').slice(0, 10); return date >= start && date <= end; }).map(function(session) { var cls = classes.find(function(c) { return c && c.id === session.class_id; }) || {}; var institute = institutes.find(function(i) { return i && i.id === cls.institute_id; }) || {}; return { session: session, cls: cls, institute: institute }; }).sort(function(a, b) { return String(a.session.session_date).localeCompare(String(b.session.session_date)) || String(a.session.session_time || '').localeCompare(String(b.session.session_time || '')) || String(a.cls.class_name || '').localeCompare(String(b.cls.class_name || '')); }) : [];
+    var byDate = {};
+    rows.forEach(function(row) { var date = String(row.session.session_date || '').slice(0, 10); if (!byDate[date]) byDate[date] = []; byDate[date].push(row); });
+    return React.createElement(View, { style: styles.screen, componentId: 'schedule-screen' },
+      React.createElement(StatusBar, { backgroundColor: PRIMARY, barStyle: 'light-content' }),
+      React.createElement(ScreenHeader, { id: 'schedule', title: 'Monthly schedule', subtitle: validMonth ? new Date(Number(selectedMonth.slice(0, 4)), Number(selectedMonth.slice(5, 7)) - 1, 1).toLocaleDateString(undefined, { month: 'long', year: 'numeric' }) : 'Enter a month' }),
+      React.createElement(ScrollView, { style: { height: height - insets.top - insets.bottom - 88, overflow: 'auto' }, contentContainerStyle: { paddingTop: 16, paddingBottom: TAB_MENU_HEIGHT + insets.bottom + SCROLL_EXTRA_PADDING, paddingHorizontal: 16 }, componentId: 'schedule-scroll' },
+        React.createElement(Text, { style: styles.fieldLabel }, 'Month'),
+        React.createElement(TextInput, { style: styles.reportMonthInput, value: selectedMonth, onChangeText: setSelectedMonth, placeholder: 'YYYY-MM', placeholderTextColor: MUTED, componentId: 'schedule-month-input' }),
+        validMonth ? React.createElement(Text, { style: styles.body, componentId: 'schedule-summary' }, rows.length + ' session' + (rows.length === 1 ? '' : 's') + ' this month, including cancelled sessions.') : React.createElement(Text, { style: styles.body }, 'Enter a valid month as YYYY-MM.'),
+        validMonth && rows.length ? Object.keys(byDate).sort().map(function(date, dayIndex) {
+          var dayRows = byDate[date].map(function(row, i) {
+            var session = row.session;
+            var cancelled = session.session_status === 'cancelled';
+            var time = session.session_time ? String(session.session_time).slice(0, 5) : '';
+            return React.createElement(TouchableOpacity, { key: session.id || i, style: styles.listCard, disabled: cancelled, onPress: function() { props.navigation.navigate('Attendance', { sessionId: session.id }); }, componentId: 'schedule-session-' + dayIndex + '-' + i },
+              React.createElement(View, { style: { flex: 1 } },
+                React.createElement(Text, { style: styles.cardTitle }, (time ? time + ' · ' : '') + (row.cls.class_name || 'Class')),
+                React.createElement(Text, { style: styles.meta }, [row.institute.institute_name, session.session_type, (session.duration_minutes || '—') + ' min'].filter(Boolean).join(' · ')),
+                React.createElement(Text, { style: [styles.statusText, cancelled ? { color: DANGER } : null] }, cancelled ? 'Cancelled' : session.session_status === 'held' ? 'Held' : 'Scheduled'))
+            );
+          });
+          return React.createElement(View, { key: date, componentId: 'schedule-day-' + dayIndex }, React.createElement(Text, { style: styles.sectionTitle }, new Date(date + 'T12:00:00').toLocaleDateString(undefined, { weekday: 'long', month: 'long', day: 'numeric' })), dayRows);
+        }) : validMonth ? React.createElement(EmptyLine, { id: 'schedule-empty', icon: 'calendar-outline', text: 'No sessions scheduled for this month.' }) : null
+      )
+    );
+  };
+  // @end:ScheduleScreen
 
   // @section:ClassesScreen @depends:[ThemeContext,styles,helpers]
   var ClassesScreen = function(props) {
@@ -603,66 +643,7 @@ var ClassDetailScreen = function(props) {
             React.createElement(ActionButton, { id: props.componentId + '-confirm', label: 'Use this date', onPress: function() {
               props.onChange(year + '-' + String(month).padStart(2, '0') + '-' + String(day).padStart(2, '0')); setOpen(false);
             } }),
-            React.createElement(ActionButton, { id: props.componentId + '-cancel', label: 'Cancel', secondary: true, onPress: function() { setOpen(false); }, style: { marginTop: 8 } })
-          )
-        )
-      )
-    );
-  };
-  // @end:DatePickerInput
-
-  // @section:StudentProfileScreen @depends:[ThemeContext,styles,helpers]
-  var StudentProfileScreen = function(props) {
-    var insets = useSafeAreaInsets();
-    var height = useWindowDimensions().height;
-    var studentId = props.route && props.route.params ? props.route.params.studentId : null;
-    var studentsQuery = useQuery('students');
-    var enrolmentsQuery = useQuery('enrolments');
-    var classesQuery = useQuery('classes');
-    var student = studentsQuery.data.find(function(s) { return s && s.id === studentId; }) || {};
-    var rows = enrolmentsQuery.data.filter(function(e) { return e && e.student_id === studentId; });
-    return React.createElement(View, { style: styles.screen, componentId: 'student-profile-screen' },
-      React.createElement(StatusBar, { backgroundColor: PRIMARY, barStyle: 'light-content' }),
-      React.createElement(ScreenHeader, { id: 'student-profile', title: student.full_name || 'Student profile', subtitle: 'Contact & enrolment history', onBack: function() { props.navigation.goBack(); } }),
-      React.createElement(ScrollView, { style: { height: height - insets.top - insets.bottom - 88, overflow: 'auto' }, contentContainerStyle: { paddingTop: 16, paddingBottom: insets.bottom + SCROLL_EXTRA_PADDING, paddingHorizontal: 16 }, componentId: 'student-profile-scroll' },
-        React.createElement(View, { style: styles.summaryCard, componentId: 'student-profile-contact' },
-          React.createElement(Text, { style: styles.cardTitle, componentId: 'student-profile-contact-heading' }, 'Contact'),
-          React.createElement(Text, { style: styles.body, componentId: 'student-profile-phone' }, 'Student phone  ' + (student.student_phone || 'Not provided')),
-          React.createElement(Text, { style: styles.body, componentId: 'student-profile-guardian' }, 'Guardian  ' + (student.guardian_name || 'Not provided')),
-          React.createElement(Text, { style: styles.body, componentId: 'student-profile-guardian-phone' }, 'Guardian phone  ' + (student.guardian_phone || 'Not provided')),
-          student.notes ? React.createElement(Text, { style: styles.meta, componentId: 'student-profile-notes' }, student.notes) : null
-        ),
-        React.createElement(Text, { style: styles.sectionTitle, componentId: 'student-profile-enrolments-heading' }, 'Enrolments'),
-        rows.length ? rows.map(function(e, i) {
-          var c = classesQuery.data.find(function(x) { return x && x.id === e.class_id; }) || {};
-          return React.createElement(TouchableOpacity, { key: String(e.id || i), style: styles.listCard, onPress: function() { props.navigation.navigate('ClassDetail', { classId: e.class_id }); }, componentId: 'student-profile-enrolment-' + i },
-            React.createElement(View, { style: { flex: 1 }, componentId: 'student-profile-enrolment-info-' + i },
-              React.createElement(Text, { style: styles.cardTitle, componentId: 'student-profile-enrolment-class-' + i }, c.class_name || 'Class unavailable'),
-              React.createElement(Text, { style: styles.meta, componentId: 'student-profile-enrolment-dates-' + i }, labelDate(e.start_date) + (e.end_date ? ' – ' + labelDate(e.end_date) : ' – present')),
-              React.createElement(Text, { style: styles.statusText, componentId: 'student-profile-enrolment-status-' + i }, e.is_active === false ? 'Ended' : 'Active')
-            )
-          );
-        }) : React.createElement(EmptyLine, { id: 'student-profile-enrolments', text: 'No class enrolments yet.' }),
-        React.createElement(ActionButton, { id: 'student-profile-add-enrolment', label: 'Enrol in a class', icon: 'add', onPress: function() { props.navigation.navigate('Enrolment', { studentId: studentId }); }, style: { marginTop: 16 } })
-      )
-    );
-  };
-  // @end:StudentProfileScreen
-
-  // @section:EnrolmentScreen @depends:[ThemeContext,styles,helpers,DatePickerInput]
-  var EnrolmentScreen = function(props) {
-    var insets = useSafeAreaInsets();
-    var height = useWindowDimensions().height;
-    var params = props.route && props.route.params ? props.route.params : {};
-    var classesQuery = useQuery('classes');
-    var institutesQuery = useQuery('institutes');
-    var studentsQuery = useQuery('students');
-    var enrolmentsQuery = useQuery('enrolments');
-    var insertEnrolment = useMutation('enrolments', 'insert');
-    var [classId, setClassId] = React.useState(params.classId || null);
-    var [studentId, setStudentId] = React.useState(params.studentId || null);
-    var [startDate, setStartDate] = React.useState(today());
-    var [firstBil…3856 tokens truncated….institute_id && showDurationForm ? React.createElement(View, { style: styles.summaryCard, componentId: 'attendance-teaching-duration-form' },
+            React.createElement(ActionButton, { id: props.componentId + …5094 tokens truncated…rm' },
           React.createElement(Text, { style: styles.cardTitle }, 'Actual institute teaching duration'),
           ['manual', 'start_end'].map(function(method, index) { return React.createElement(TouchableOpacity, { key: method, style: [styles.reportOptionButton, recordingMethod === method ? styles.reportOptionSelected : null], onPress: function() { setRecordingMethod(method); }, componentId: 'attendance-duration-method-' + index }, React.createElement(Text, { style: styles.reportOptionText }, method === 'manual' ? 'Enter total hours' : 'Enter start and end times')); }),
           recordingMethod === 'manual' ? React.createElement(TextInput, { style: styles.input, value: actualHours, onChangeText: setActualHours, keyboardType: 'decimal-pad', placeholder: 'Actual hours taught', placeholderTextColor: MUTED, componentId: 'attendance-actual-hours' }) : React.createElement(View, null,
@@ -1101,13 +1082,13 @@ var ClassDetailScreen = function(props) {
   });
   // @end:styles
 
-  // @section:TabNavigator @depends:[HomeScreen,ClassesScreen,StudentsScreen,ReportsScreen,SettingsScreen,navigation-setup]
+  // @section:TabNavigator @depends:[HomeScreen,ScheduleScreen,ClassesScreen,StudentsScreen,ReportsScreen,SettingsScreen,navigation-setup]
   var TabNavigator = function() {
     var insets = useSafeAreaInsets();
     return React.createElement(View, { style: { flex: 1, width: '100%', height: '100%', overflow: 'hidden' }, componentId: 'main-tab-shell' },
       React.createElement(Tab.Navigator, {
         screenOptions: function(options) {
-          var icons = { Home: 'home-outline', Classes: 'library-outline', Students: 'people-outline', Fees: 'cash-outline', Reports: 'stats-chart-outline', Settings: 'settings-outline' };
+          var icons = { Home: 'home-outline', Schedule: 'calendar-outline', Classes: 'library-outline', Students: 'people-outline', Fees: 'cash-outline', Reports: 'stats-chart-outline', Settings: 'settings-outline' };
           return {
             headerShown: false,
             tabBarActiveTintColor: PRIMARY,
@@ -1122,6 +1103,7 @@ var ClassDetailScreen = function(props) {
         }
       },
         React.createElement(Tab.Screen, { name: 'Home', component: HomeScreen }),
+        React.createElement(Tab.Screen, { name: 'Schedule', component: ScheduleScreen }),
     React.createElement(Tab.Screen, { name: 'Classes', component: ClassesScreen }),
         React.createElement(Tab.Screen, { name: 'Students', component: StudentsScreen }),
         React.createElement(Tab.Screen, { name: 'Fees', component: FeesScreen }),
